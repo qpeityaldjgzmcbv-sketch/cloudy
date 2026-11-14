@@ -180,7 +180,8 @@ type settings struct {
 	// starts as the listener logs in.
 	StartHidden bool `json:"startHidden,omitempty"`
 	// CloseQuits quits the app as its window is closed, rather than hiding
-	// it to the tray with the music playing on.
+	// it to the tray with the music playing on. Windows always quits on close;
+	// retain this setting for the other platforms and existing settings files.
 	CloseQuits bool `json:"closeQuits,omitempty"`
 	// PodcastSpeed is how fast episodes play, their pitch kept: 0 for 1.
 	PodcastSpeed float64 `json:"podcastSpeed,omitempty"`

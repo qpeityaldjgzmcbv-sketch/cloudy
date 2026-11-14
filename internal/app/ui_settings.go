@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -1133,19 +1134,21 @@ func (a *app) settingsSystemPage(k *settingsKit) {
 			k.toggle("start-hidden", "开机启动时隐藏到托盘", &s.StartHidden, false, nil)
 		})
 	})
-	k.group("关闭窗口", func() {
-		choices := []string{"最小化到托盘", "退出 Cloudy"}
-		chosen := choices[0]
-		if s.CloseQuits {
-			chosen = choices[1]
-		}
-		k.row("点击关闭按钮时", "最小化到托盘时音乐继续播放，从托盘图标打开", func() {
-			k.choose("close-action", "点击关闭按钮时", chosen, choices, func(i int) {
-				s.CloseQuits = i == 1
-				a.changed()
+	if runtime.GOOS != "windows" {
+		k.group("关闭窗口", func() {
+			choices := []string{"最小化到托盘", "退出 Cloudy"}
+			chosen := choices[0]
+			if s.CloseQuits {
+				chosen = choices[1]
+			}
+			k.row("点击关闭按钮时", "最小化到托盘时音乐继续播放，从托盘图标打开", func() {
+				k.choose("close-action", "点击关闭按钮时", chosen, choices, func(i int) {
+					s.CloseQuits = i == 1
+					a.changed()
+				})
 			})
 		})
-	})
+	}
 	k.group("任务栏", func() {
 		k.row("播放进度", "在任务栏图标上显示当前歌曲播放到哪里，暂停时显示为黄色", func() {
 			k.toggle("taskbar-progress", "任务栏播放进度", &s.TaskbarProgress, false, a.syncProgress)

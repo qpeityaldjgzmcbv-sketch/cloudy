@@ -10,8 +10,24 @@ import (
 
 // The app's icon in the menu bar on macOS, as the settings choose
 // (appIcons), and always in the notification area on Windows and Linux.
-// While it shows, closing the window leaves the music playing there, until
-// the listener quits; the icon opens the window again.
+// On Windows, closing the main window quits; minimizing keeps music playing.
+// Elsewhere, closing may hide to the tray according to the settings.
+
+var quitCloudy = func() { mygo.App.Quit() }
+
+// closeMain uses the normal quit sequence to save history and the queue.
+// A tray object does not guarantee a visible, reachable Windows tray icon.
+func (a *app) closeMain(e *mygo.CloseEvent) {
+	if a.quitting {
+		return
+	}
+	e.PreventDefault()
+	if runtime.GOOS != "windows" && !a.settings.CloseQuits && (runtime.GOOS == "darwin" || a.tray != nil) {
+		a.hideMain()
+		return
+	}
+	quitCloudy()
+}
 
 // trayTemplate is the record and tonearm of the app's icon, black on
 // transparent for macOS to tint: 15.6 points tall in the menu bar's 18, at

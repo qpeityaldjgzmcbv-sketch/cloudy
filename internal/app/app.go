@@ -341,13 +341,14 @@ func Run() error {
 		a.noteDownloadsAtStart()
 		a.pl.Listened = func(t netease.Track, played time.Duration, ended bool) {
 			a.listened(t, played, ended)
-			a.remember(t, played, ended)
+			a.rememberTracked(t, ended)
 		}
 		a.pl.SongStopped = func() {
 			a.sleep.minutes = 0
 			a.toast = "定时结束，本首播完后已暂停"
 		}
 		a.pl.Changed = func() {
+			a.observeHistory()
 			a.keepSession()
 			a.autoFollow()
 			a.syncCaptions()
@@ -375,6 +376,7 @@ func Run() error {
 			// Started at login, as the listener asked: to the tray.
 			Hidden: a.startsHidden(),
 		})
+		a.startControlBridge()
 		a.setMenu()
 		a.boot()
 		a.applyGlobalKeys()
@@ -411,21 +413,7 @@ func Run() error {
 		if shotHook != nil {
 			shotHook(a)
 		}
-		// Closing the window hides it: music plays on, and the Dock icon
-		// or the tray's brings it back. A Linux desktop without a tray
-		// has neither, so there closing it quits, as it does wherever the
-		// listener asked for that (settings.CloseQuits).
-		a.win.OnClose(func(e *mygo.CloseEvent) {
-			if a.quitting {
-				return
-			}
-			e.PreventDefault()
-			if !a.settings.CloseQuits && (runtime.GOOS == "darwin" || a.tray != nil) {
-				a.hideMain()
-			} else {
-				mygo.App.Quit()
-			}
-		})
+		a.win.OnClose(a.closeMain)
 	})
 	a.followProgress()
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
@@ -433,6 +421,7 @@ func Run() error {
 		a.settings.Volume = a.volume
 		a.settings.save()
 		a.saveSession()
+		a.flushHistory()
 		if write := a.transcriptWrite(); write != nil {
 			write()
 		}

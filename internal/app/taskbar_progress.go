@@ -51,6 +51,9 @@ func (a *app) followProgress() {
 	go func() {
 		for range time.Tick(time.Second) {
 			mygo.RunOnMain(func() {
+				if !a.quitting {
+					a.rememberCurrent()
+				}
 				if a.settings.TaskbarProgress || a.progressAt.on {
 					a.syncProgress()
 				}

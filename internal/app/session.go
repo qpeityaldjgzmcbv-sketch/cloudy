@@ -15,7 +15,7 @@ import (
 // directory: on quitting, and every little while as it plays, in case the
 // app does not get to quit.
 
-func sessionPath() (string, error) {
+var sessionPath = func() (string, error) {
 	dir, err := mygo.App.Path(mygo.PathUserData)
 	if err != nil {
 		return "", err
@@ -23,8 +23,28 @@ func sessionPath() (string, error) {
 	return filepath.Join(dir, "session.json"), nil
 }
 
+var sessionFallbackPath = func() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(exe), "cloudy-session.json"), nil
+}
+
+func sessionPaths() []string {
+	var paths []string
+	if p, e := sessionPath(); e == nil {
+		paths = append(paths, p)
+	}
+	if p, e := sessionFallbackPath(); e == nil && (len(paths) == 0 || paths[0] != p) {
+		paths = append(paths, p)
+	}
+	return paths
+}
+
 // saveSession keeps where playback is, if it moved on since last kept.
 func (a *app) saveSession() {
+	a.rememberCurrent()
 	s, ok := a.pl.Session()
 	if !ok {
 		return
@@ -33,13 +53,14 @@ func (a *app) saveSession() {
 	if err != nil || string(b) == a.savedSession {
 		return
 	}
-	path, err := sessionPath()
-	if err != nil {
-		return
+	for _, path := range sessionPaths() {
+		if writeFileAtomic(path, b, 0o600) == nil {
+			a.savedSession = string(b)
+			return
+		}
 	}
-	if writeFileAtomic(path, b, 0o600) == nil {
-		a.savedSession = string(b)
-	}
+	a.toast = "播放会话保存失败"
+
 }
 
 // sessionEvery is how long after playback changed, and how often as it
@@ -75,19 +96,26 @@ func (a *app) restoreSession() {
 		return
 	}
 	a.restored = true
-	path, err := sessionPath()
-	if err != nil {
-		return
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
 	var s player.Session
-	if json.Unmarshal(b, &s) != nil {
+	var latest time.Time
+	for _, path := range sessionPaths() {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var candidate player.Session
+		if json.Unmarshal(raw, &candidate) == nil && len(candidate.Queue) > 0 && (latest.IsZero() || info.ModTime().After(latest)) {
+			s, latest = candidate, info.ModTime()
+			a.savedSession = string(raw)
+		}
+	}
+	if latest.IsZero() {
 		return
 	}
-	a.savedSession = string(b)
 	a.pl.Restore(s)
 	if s.Radio != "" && a.pl.Current() != nil {
 		a.pl.AttachRadio(s.Radio, a.radioFeed(s.Radio))

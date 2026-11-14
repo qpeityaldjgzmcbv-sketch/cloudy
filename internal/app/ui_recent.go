@@ -12,7 +12,8 @@ type recentState struct {
 	played []playedSong
 	loaded bool // whether history.json was read
 	// sure is the 清空 button asked again, its next click clearing.
-	sure bool
+	sure  bool
+	heard historyListening
 }
 
 // recentPage lists the songs played on this computer, the one playing and
