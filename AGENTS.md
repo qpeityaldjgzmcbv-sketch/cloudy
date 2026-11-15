@@ -26,6 +26,8 @@ MyGo is our fork, github.com/nya-owo/mygo, pinned by the `replace` in `go.mod`; 
 
 ## Tests
 
+Album Shelf 连接版更新和本机构建部署先读 `BUILDING-SHELF.md`，避免重复安装工具链、遗漏代理/临时目录或只合并源码而未更新用户启动的开发版程序。
+
 Only write a test for behaviour that can actually break. If the code under test could change without the test noticing, or the test would fail on a harmless rewording, don't write it.
 
 **Write tests for:**
