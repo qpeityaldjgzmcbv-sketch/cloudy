@@ -10,19 +10,26 @@ import (
 
 // The app's icon in the menu bar on macOS, as the settings choose
 // (appIcons), and always in the notification area on Windows and Linux.
-// On Windows, closing the main window quits; minimizing keeps music playing.
-// Elsewhere, closing may hide to the tray according to the settings.
+// Closing the main window hides it when a tray icon is available.
 
 var quitCloudy = func() { mygo.App.Quit() }
 
-// closeMain uses the normal quit sequence to save history and the queue.
-// A tray object does not guarantee a visible, reachable Windows tray icon.
+func hidesOnClose(goos string, closeQuits, trayAvailable bool) bool {
+	return (goos == "darwin" || trayAvailable) && (goos == "windows" || !closeQuits)
+}
+
+// closeMain hides to the tray, or saves history and the queue when quitting.
 func (a *app) closeMain(e *mygo.CloseEvent) {
 	if a.quitting {
 		return
 	}
 	e.PreventDefault()
-	if runtime.GOOS != "windows" && !a.settings.CloseQuits && (runtime.GOOS == "darwin" || a.tray != nil) {
+	trayAvailable := a.tray != nil
+	if runtime.GOOS == "windows" && trayAvailable {
+		bounds := a.tray.Bounds()
+		trayAvailable = bounds.Width > 0 && bounds.Height > 0
+	}
+	if hidesOnClose(runtime.GOOS, a.settings.CloseQuits, trayAvailable) {
 		a.hideMain()
 		return
 	}

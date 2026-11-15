@@ -18,7 +18,12 @@ try {
     $resourceCreated = $true
     & $Go build -trimpath -tags mygo_noinspector -ldflags $flags -o build/Cloudy-Shelf.exe .
     if ($LASTEXITCODE -ne 0) { throw "Cloudy build failed" }
-    $launcher = '@echo off' + "`r`n" + 'setlocal' + "`r`n" + 'set "CLOUDY_BRIDGE_FILE=%~dp0cloudy-bridge.json"' + "`r`n" + 'start "" "%~dp0Cloudy-Shelf.exe"' + "`r`n"
+    # Workspace executables can inherit a Low Mandatory Level label, which
+    # prevents Windows tray registration. Copy bytes to a normal user app folder.
+    $devDir = Join-Path $env:LOCALAPPDATA 'Programs/Afterglow-Development/Cloudy'
+    New-Item -ItemType Directory -Path $devDir -Force | Out-Null
+    Copy-Item -LiteralPath 'build/Cloudy-Shelf.exe' -Destination (Join-Path $devDir 'Cloudy.exe')
+    $launcher = '@echo off' + "`r`n" + 'setlocal' + "`r`n" + 'set "CLOUDY_BRIDGE_FILE=%LOCALAPPDATA%\AlbumShelf\cloudy-bridge.json"' + "`r`n" + 'start "" "%LOCALAPPDATA%\Programs\Afterglow-Development\Cloudy\Cloudy.exe"' + "`r`n"
     [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'build/Start-Shelf.cmd'), $launcher, [System.Text.Encoding]::ASCII)
 } finally {
     if ($resourceCreated -and (Test-Path -LiteralPath $resource)) {
