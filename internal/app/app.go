@@ -44,6 +44,8 @@ type route struct {
 // app is the state both windows show. Everything in it is read and changed
 // on the main thread: by the views, and by goroutines through post.
 type app struct {
+	savingCover bool // a cover fetch or save dialog is already in progress
+
 	win   *mygo.Window
 	notch *notch
 	tray  *mygo.Tray // the icon in the menu bar or notification area, while it shows
@@ -51,10 +53,21 @@ type app struct {
 	pl    *player.Player
 	pal   palette
 
-	// thumbsAt is what the taskbar thumbnail shows (thumbbar.go), and
-	// thumbDark whether the taskbar is dark.
+	trayPopup trayPopupWindow // Windows' independent, short-lived tray menu
+	// trayPopupGlass is whether it is glass, over trayBackdrop, the desktop
+	// under it; trayPopupDone stops watching for a press outside it, and
+	// trayPopupClosed is when a press outside last closed it.
+	trayPopupGlass  bool
+	trayBackdrop    *ui.Bitmap
+	trayPopupDone   chan struct{}
+	trayPopupClosed time.Time
+
+	// thumbsAt is what the taskbar thumbnail shows (thumbbar.go),
+	// thumbDark whether the taskbar is dark, and altTab whether Alt+Tab is
+	// open (thumbswitch_windows.go).
 	thumbsAt  *thumbState
 	thumbDark bool
+	altTab    bool
 
 	route   route
 	history []route
@@ -139,7 +152,7 @@ type app struct {
 	sysAccent    string    // the desktop's accent as #RRGGBB, "" where it has none
 	npOpen       bool      // Now Playing as it last showed: open or not
 	npChangedAt  time.Time // when it last opened or closed
-	npPane       int       // paneLyrics, paneQueue, paneStage, paneComments, paneProgram or paneCaptions
+	npPane       int       // paneLyrics, paneQueue, paneStage, paneComments, paneProgram, paneCaptions, paneWall or paneWiki
 	npPaneTop    float32   // how far the cover beside the pane starts below its top
 	npRest       float32   // how tall what goes under the cover is, as last laid out
 	lyricScroll  ui.ScrollState
@@ -150,6 +163,7 @@ type app struct {
 	lyricTrack   int64
 	queueList    ui.ListState
 	queueAt      int             // the row of the queue pane last scrolled to, -1 while it is hidden
+	more         moreState       // what 1.2.13's additions keep (more_state.go)
 	loginKnown   *bool           // whether the app starts at login, once asked
 	sideDragging bool            // the sidebar's edge is being dragged
 	shownTracks  []netease.Track // the songs the page lists now, for choosing among them
@@ -245,9 +259,10 @@ type app struct {
 	savedSession string // the session as last kept
 	sessionDue   bool   // a save of the session is due
 
-	style      styleState    // the day's songs in the styles picked
-	radar      radarState    // NetEase's radars on the home page
-	progressAt progressShown // what the taskbar button last showed of the song
+	style         styleState // the day's songs in the styles picked
+	radar         radarState // NetEase's radars on the home page
+	lyricDownload lyricDownloadState
+	progressAt    progressShown // what the taskbar button last showed of the song
 }
 
 // post runs fn on the main thread and redraws both windows. Without a
@@ -263,7 +278,27 @@ func (a *app) post(fn func()) {
 	})
 }
 
+// postQuiet returns a post that runs fn on the main thread but redraws
+// only if shown, asked there, says what fn changed is on screen: progress
+// every tenth of a second that nothing shows wakes no window.
+func (a *app) postQuiet(shown func() bool) func(func()) {
+	return func(fn func()) {
+		if a.win == nil {
+			return
+		}
+		mygo.RunOnMain(func() {
+			fn()
+			if shown() {
+				a.redraw()
+			}
+		})
+	}
+}
+
 func (a *app) redraw() {
+	if a.trayPopup != nil {
+		a.trayPopup.Invalidate()
+	}
 	if a.win != nil {
 		a.win.Invalidate()
 	}
@@ -337,6 +372,8 @@ func Run() error {
 		a.pl.Normalize = func() bool { return a.settings.Normalize }
 		a.pl.Crossfade = a.crossfade
 		a.pl.Cache = newSongCache(a.settings.CacheFolder, a.settings.CacheMB)
+		a.pl.Loud = openLoudness()
+		go player.DropStreamSpools()
 		a.pl.LocalFile = a.downloadedFile
 		a.noteDownloadsAtStart()
 		a.pl.Listened = func(t netease.Track, played time.Duration, ended bool) {
@@ -380,6 +417,7 @@ func Run() error {
 		a.setMenu()
 		a.boot()
 		a.applyGlobalKeys()
+		a.watchAltTab()
 		// The notch player is macOS's, over its menu bar: elsewhere it would
 		// hang at the top of the screen as a black box.
 		if runtime.GOOS == "darwin" {
@@ -429,6 +467,7 @@ func Run() error {
 	// Windows leaves an icon in the notification area after its app until
 	// the pointer passes over it.
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		a.closeTrayPopup()
 		if a.tray != nil {
 			a.tray.Destroy()
 		}

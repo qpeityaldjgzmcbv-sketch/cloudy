@@ -8,6 +8,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"netease-music-mygo/internal/netease"
+	"netease-music-mygo/internal/player"
 )
 
 // copyText puts text on the clipboard; tests replace it.
@@ -21,13 +22,13 @@ func (a *app) songActions(tr *netease.Track, pid int64) [][]menuAction {
 	// A file put in the folder by hand is no NetEase song: only its file
 	// can be acted on. A downloaded song is still one, with its file too.
 	if tr.LocalPath != "" && tr.ID <= 0 {
-		return a.downloadedSongActions(tr)
+		return a.withCoverAction(a.downloadedSongActions(tr), tr)
 	}
 	// The list can move under the menu; the song it names cannot.
 	song := *tr
 	next := menuAction{label: "下一首播放", icon: iconNext, do: func() { a.playNext([]netease.Track{song}) }}
 	if tr.ProgramID != 0 {
-		return append([][]menuAction{{next}}, a.programActions(tr)...)
+		return a.withCoverAction(append([][]menuAction{{next}}, a.programActions(tr)...), tr)
 	}
 	a.loadDownloads(false)
 	save := menuAction{label: "下载到本机", icon: iconDownload, do: func() { a.startDownload(song) }}
@@ -54,7 +55,11 @@ func (a *app) songActions(tr *netease.Track, pid int64) [][]menuAction {
 			{label: "复制文件路径", icon: iconCopy, do: func() { copyText(song.LocalPath) }},
 		})
 	}
-	groups = append(groups, []menuAction{save})
+	files := []menuAction{save, {label: "下载歌词", icon: iconLyrics, do: func() { a.openLyricDownload(song) }}}
+	if tr.Album.PicURL != "" {
+		files = append(files, a.coverAction(tr))
+	}
+	groups = append(groups, files)
 	// Its artists' and album's pages, those NetEase has.
 	var pages []menuAction
 	for _, ar := range tr.Artists {
@@ -74,6 +79,15 @@ func (a *app) songActions(tr *netease.Track, pid int64) [][]menuAction {
 		groups = append(groups, lists)
 	}
 	return groups
+}
+
+// withCoverAction adds saving the cover, in a group of its own, to the
+// menus that have no download row to put it beside.
+func (a *app) withCoverAction(groups [][]menuAction, tr *netease.Track) [][]menuAction {
+	if tr.Album.PicURL == "" {
+		return groups
+	}
+	return append(groups, []menuAction{a.coverAction(tr)})
 }
 
 // playNext puts tracks right after the song playing, and says so.
@@ -122,14 +136,40 @@ func (a *app) songMenu(c *ui.Context, tr *netease.Track, size float32, color ui.
 
 // songMenuLabeled is songMenu with the name its button is known by: the
 // player bar calls it details.
-func (a *app) songMenuLabeled(c *ui.Context, tr *netease.Track, size float32, color ui.Color, label string) ui.Element {
+func (a *app) songMenuLabeled(c *ui.Context, tr *netease.Track, size float32, color ui.Color, label string, extra ...[]menuAction) ui.Element {
 	b := iconButton(c, iconMore, size, color, label)
 	if b.Clicked() {
 		// The details of what plays, which the sound effects shape too.
 		fx := menuAction{label: "音效", icon: iconWave, note: a.effectsNote(), do: a.openEffects}
-		a.menuBelow(b, true, append([][]menuAction{{fx}}, a.songActions(tr, 0)...), a.songHead(tr))
+		groups := append([][]menuAction{{fx}}, extra...)
+		a.menuBelow(b, true, append(groups, a.songActions(tr, 0)...), a.songHead(tr))
 	}
 	return b
+}
+
+// compactPlayerActions keeps the tools omitted from a narrow bar in its
+// existing menu, including the playback mode and floating windows.
+func (a *app) compactPlayerActions(tr *netease.Track) []menuAction {
+	var modes []menuAction
+	for _, mode := range []player.PlayMode{player.ModeOrder, player.ModeLoop, player.ModeOne, player.ModeShuffle} {
+		modes = append(modes, menuAction{label: mode.Name(), icon: modeIcon(mode), checked: a.pl.Mode() == mode, do: func() {
+			a.pl.SetMode(mode)
+			a.say("mode", mode.Name())
+		}})
+	}
+	actions := []menuAction{
+		{label: "播放模式", icon: modeIcon(a.pl.Mode()), note: a.pl.Mode().Name(), sub: [][]menuAction{modes}},
+		{label: "桌面歌词", icon: iconSubtitles, checked: a.settings.DeskLyrics, do: a.toggleDeskLyrics},
+		{label: "迷你窗口", icon: iconMiniWin, do: a.showMini},
+	}
+	// Signed in, the song actions already have the playlist submenu.
+	if a.profile == nil && tr.ProgramID == 0 && tr.ID > 0 {
+		actions = append(actions, menuAction{label: "添加到歌单", icon: iconListPlus, do: func() {
+			a.toast = "登录后才能添加到歌单"
+			a.openLogin()
+		}})
+	}
+	return actions
 }
 
 // songContext opens the menu of tr, listed in pid if set, on a right click

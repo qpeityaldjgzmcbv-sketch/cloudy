@@ -206,9 +206,7 @@ func (a *app) podcastPage(c *ui.Context) {
 					}
 					ui.Text(c, fmt.Sprintf("%d 期 · %s 人订阅", pod.ProgramCount, count(int(pod.SubCount))))
 				})
-				if desc := strings.TrimSpace(pod.Description); desc != "" {
-					ui.Text(c, strings.ReplaceAll(desc, "\n", " ")).FontSize(12.5).TextColor(p.muted).MaxLines(2).LineHeight(1.45).Margin(2, 0, 0, 0)
-				}
+				a.introLine(c, "播客简介", pod.Description, 0)
 				ui.Row(c).Gap(10).Margin(10, 0, 0, 0).Children(func() {
 					if pillButton(c.Key("play"), iconPlay, "播放", p.accent, p.onAccent).Clicked() {
 						a.playProgram(d, 0)

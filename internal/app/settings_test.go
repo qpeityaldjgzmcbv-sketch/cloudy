@@ -102,7 +102,7 @@ func TestSettingsCategoryNavigation(t *testing.T) {
 	}
 	choose("播放", settingsPlayback)
 	choose("关于", settingsAbout)
-	toggle("自动安装更新", "在后台下载并装好新版本，不弹窗，下次打开软件时生效")
+	toggle("自动安装更新", "后台发现新版本时直接装好，下次打开软件时生效；手动检查仍会先问你")
 	if !a.settings.UpdateInstall {
 		t.Fatal("the update preference did not change")
 	}

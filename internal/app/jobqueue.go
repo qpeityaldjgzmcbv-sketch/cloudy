@@ -99,8 +99,10 @@ func (q *jobQueue[T, K]) next() (T, bool) {
 
 // run runs it as the job. work runs in a goroutine, with a context that
 // stop cancels, and reports its progress; the func it returns runs on the
-// main thread as it ends, unless the job was stopped meanwhile.
-func (q *jobQueue[T, K]) run(it T, post func(func()), work func(ctx context.Context, progress func(done, size int64)) func()) {
+// main thread as it ends, unless the job was stopped meanwhile. Its
+// progress comes back through progressPost, which need not redraw what
+// does not show it.
+func (q *jobQueue[T, K]) run(it T, post, progressPost func(func()), work func(ctx context.Context, progress func(done, size int64)) func()) {
 	q.running = &it
 	q.done, q.size = 0, 0
 	q.gen++
@@ -109,7 +111,7 @@ func (q *jobQueue[T, K]) run(it T, post func(func()), work func(ctx context.Cont
 	q.cancel = cancel
 	go func() {
 		end := work(ctx, func(done, size int64) {
-			post(func() {
+			progressPost(func() {
 				if gen == q.gen && q.running != nil {
 					q.done, q.size = done, size
 				}

@@ -265,7 +265,7 @@ func TestRetryStalledDownloadTimesOut(t *testing.T) {
 		http.DefaultTransport = navigationTransport(func(r *http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: &retryBody{ctx: r.Context(), chunks: chunks}, Request: r}, nil
 		})
-		dl := startDownload("https://audio.test/stall", 0, nil, nil)
+		dl := startDownload("https://audio.test/stall", 0, nil, nil, nil)
 		defer dl.Close()
 		dl.waitFor(5)
 		time.Sleep(15 * time.Second)

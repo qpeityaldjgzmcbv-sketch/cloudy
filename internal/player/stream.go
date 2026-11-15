@@ -41,8 +41,9 @@ type download struct {
 	cancel context.CancelFunc
 	// part is the file's path until the cache keeps it, which keep does
 	// once the song has all come in: the path it is at then.
-	part string
-	keep func(part string, n int64) (string, bool)
+	part   string
+	keep   func(part string, n int64) (string, bool)
+	settle func(string)
 	// users counts what reads or writes the song: the stream decoding it,
 	// until it closes, and the goroutine fetching it. The last to go
 	// closes the file, and removes it unless the cache kept it.
@@ -52,13 +53,14 @@ type download struct {
 
 // startDownload fetches url, of size bytes if known, into part, a file
 // that keep keeps once it has all come in: or into memory, without one.
-func startDownload(url string, size int64, part *os.File, keep func(string, int64) (string, bool)) *download {
+func startDownload(url string, size int64, part *os.File,
+	keep func(string, int64) (string, bool), settle func(string)) *download {
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &download{size: size, cancel: cancel, users: 2}
 	d.cond.L = &d.mu
 	switch {
 	case part != nil:
-		d.file, d.part, d.keep = part, part.Name(), keep
+		d.file, d.part, d.keep, d.settle = part, part.Name(), keep, settle
 	case size > 0:
 		d.data = make([]byte, 0, prealloc(size))
 	}
@@ -215,6 +217,9 @@ func (d *download) hand() {
 	d.file.Close()
 	path, ok := d.keep(d.part, d.n)
 	f, err := os.Open(path)
+	if ok && d.settle != nil {
+		d.settle(path)
+	}
 	if err != nil {
 		d.file, d.n, d.done, d.err = nil, 0, true, err
 		return

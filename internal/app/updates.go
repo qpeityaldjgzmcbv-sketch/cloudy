@@ -59,7 +59,10 @@ func (a *app) startCheck(auto bool) {
 		return
 	}
 	u := &a.update
-	if u.checking || u.downloading {
+	// Installed, the update waits for the restart: checking again would
+	// find it once more, as this is still the version before, and installing
+	// it again fails, its files in use. The pane says to restart.
+	if u.checking || u.downloading || u.ready {
 		if !auto {
 			u.open = true
 			a.redraw()
@@ -94,10 +97,10 @@ func (a *app) checkedUpdates(up *mygo.Update, err error) {
 		u.up, u.err = up, ""
 	}
 	switch {
-	case u.up != nil && a.settings.UpdateInstall:
-		// Installed in the background, for the next launch: nothing to ask.
-		// Asked for, the pane stays, saying what it found as it downloads.
-		u.open = !u.auto
+	case u.up != nil && a.settings.UpdateInstall && u.auto:
+		// The app's own check installs in the background, for the next
+		// launch: nothing to ask. One the listener asked for offers the
+		// update, for them to choose to install it now or not.
 		a.installUpdate()
 	case u.up != nil:
 		u.open = true

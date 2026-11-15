@@ -52,7 +52,7 @@ func TestUpdateSettings(t *testing.T) {
 		tt.ClickAt(560-24-16-12, (top.Y+bottom.Y+bottom.H)/2)
 		tt.Frame()
 	}
-	toggle("自动安装更新", "在后台下载并装好新版本，不弹窗，下次打开软件时生效")
+	toggle("自动安装更新", "后台发现新版本时直接装好，下次打开软件时生效；手动检查仍会先问你")
 	if !a.settings.UpdateInstall {
 		t.Fatal("still asks before installing updates")
 	}
@@ -86,9 +86,37 @@ func TestCheckForUpdatesFromSettings(t *testing.T) {
 	}
 }
 
+// An update installed but not yet restarted into is not checked for, nor
+// installed, again: this is still the version before, which would find it
+// once more, and fail to install it over the files in use, "Access is
+// denied". Asked, the pane opens on the restart.
+func TestNoCheckOnceInstalled(t *testing.T) {
+	asked := make(chan struct{}, 1)
+	defer fakeUpdateCheck(asked)()
+	a := newTestApp()
+	a.settings = defaultSettings()
+	a.update = updateState{ready: true, up: &mygo.Update{Version: "9.9.9"}}
+	for _, auto := range []bool{true, false} {
+		a.update.open = false
+		a.startCheck(auto)
+		if a.update.checking || !a.update.ready {
+			t.Fatalf("auto %v: checks again: %+v", auto, a.update)
+		}
+		if a.update.open == auto {
+			t.Errorf("auto %v: the pane open is %v", auto, a.update.open)
+		}
+	}
+	select {
+	case <-asked:
+		t.Fatal("checked for the update installed")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 // A check that finds nothing says so, one that finds an update offers it,
-// and one that fails says why; an install the listener asked for leaves the
-// asking out.
+// and one that fails says why. With updates installed without asking, the
+// app's own check installs one at once; a check the listener asked for
+// offers it all the same, for them to choose whether to install it now.
 func TestCheckedUpdates(t *testing.T) {
 	a := newTestApp()
 	a.settings = defaultSettings()
@@ -116,19 +144,25 @@ func TestCheckedUpdates(t *testing.T) {
 	}
 	defer func() { installUpdate = real }()
 	a.settings.UpdateInstall = true
-	for _, auto := range []bool{true, false} {
-		a.update = updateState{auto: auto}
-		a.checkedUpdates(&mygo.Update{Version: "9.9.9"}, nil)
-		select {
-		case <-installed:
-		case <-time.After(2 * time.Second):
-			t.Fatal("did not install the update it was told to")
-		}
-		// Its own check installs in the background; one the listener
-		// asked for says what it found as it downloads.
-		if a.update.open == auto {
-			t.Errorf("auto %v: the pane open is %v", auto, a.update.open)
-		}
+	a.update = updateState{auto: true}
+	a.checkedUpdates(&mygo.Update{Version: "9.9.9"}, nil)
+	select {
+	case <-installed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not install the update it was told to")
+	}
+	if a.update.open {
+		t.Error("the app's own check opened the pane to install")
+	}
+	a.update = updateState{open: true}
+	a.checkedUpdates(&mygo.Update{Version: "9.9.10"}, nil)
+	select {
+	case <-installed:
+		t.Fatal("installed the update the listener checked for without asking")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if !a.update.open || a.update.downloading || a.update.up == nil {
+		t.Errorf("the update the listener checked for is not offered: %+v", a.update)
 	}
 }
 

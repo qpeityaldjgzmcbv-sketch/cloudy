@@ -102,9 +102,11 @@ func cacheNavigationTrack(t *testing.T, p *Player, id int64) {
 		t.Fatal(err)
 	}
 	f.Close()
-	if _, ok := p.Cache.keep(id, st, f.Name(), int64(len(b))); !ok {
+	path, ok := p.Cache.keep(id, st, f.Name(), int64(len(b)))
+	if !ok {
 		t.Fatal("could not cache fixture")
 	}
+	p.Cache.settled(path)
 }
 
 func finishNavigation(t *testing.T, p *Player, ch chan func()) {
@@ -189,9 +191,11 @@ func TestNavigationCorruptCacheReloadsSameTrack(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	if _, ok := c.keep(7, st, f.Name(), int64(len(b))); !ok {
+	path, ok := c.keep(7, st, f.Name(), int64(len(b)))
+	if !ok {
 		t.Fatal("could not seed cache")
 	}
+	c.settled(path)
 	var asked []int64
 	songURL = func(ctx context.Context, id int64, level string) (*netease.Stream, error) {
 		asked = append(asked, id)

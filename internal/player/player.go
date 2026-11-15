@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -38,6 +37,8 @@ type Player struct {
 	Normalize func() bool
 	// Cache keeps the songs played, if set.
 	Cache *Cache
+	// Loud keeps how loud tracks were measured to be, if set.
+	Loud *Loudness
 	// Downloaded, if set, returns the file a song was downloaded to, or "":
 	// a downloaded song plays from it wherever it was started from, not
 	// from the network. It is called off the window's goroutine.
@@ -83,19 +84,21 @@ type Player struct {
 	cover   []byte
 	coverOf int64
 
-	track      *netease.Track
-	out        *audio.Player
-	stream     stream
-	info       *netease.Stream // what the current track streams
-	fade       fader
-	gain       float64 // the current track's normalizing gain
-	loading    bool
-	playing    bool // what the listener wants: false while paused
-	err        string
-	gen        int                // counts loads, to drop the results of stale ones
-	cancelLoad context.CancelFunc // stops a load that is no longer selected
-	retryTimer *time.Timer
-	retries    int // reconnections for the current selection
+	track  *netease.Track
+	out    *audio.Player
+	stream stream
+	info   *netease.Stream // what the current track streams
+	fade   fader
+	gain   float64 // the current track's normalizing gain
+	// measureStop stops measuring the loudness of the track, if it is.
+	measureStop context.CancelFunc
+	loading     bool
+	playing     bool // what the listener wants: false while paused
+	err         string
+	gen         int                // counts loads, to drop the results of stale ones
+	cancelLoad  context.CancelFunc // stops a load that is no longer selected
+	retryTimer  *time.Timer
+	retries     int // reconnections for the current selection
 
 	// Crossfade, if set, is how long songs fade into each other as one
 	// ends: 0 for not at all.
@@ -204,6 +207,8 @@ func (p *Player) ended() {
 		return
 	}
 	if p.repeat == RepeatOne {
+		// Each time round is a listen of its own, told as it ends.
+		p.heardGen = 0
 		p.out.Seek(0)
 		p.out.Play()
 		return
@@ -652,17 +657,72 @@ func (p *Player) applyGain() {
 // loudness of ReplayGain, nearer to how loud music plays elsewhere.
 const normPreamp = 4
 
-// normGain is the gain that brings a track as loud as others, as NetEase
-// measured it, but never so loud that its peaks would clip.
-func normGain(st *netease.Stream) float64 {
-	if st == nil || st.Gain == 0 && st.Peak == 0 {
-		return 1
+// startGain is the normalizing gain track t starts playing at, opened as
+// info says, of the loudness NetEase measured, or the player did before.
+// Not known yet, it plays at the gain of most songs meanwhile, and s is
+// measured, for the gain to glide to its own once it is: the load of gen.
+func (p *Player) startGain(gen int, t netease.Track, info *netease.Stream, s stream) float64 {
+	var fileKey string
+	if info != nil && info.Path != "" {
+		fileKey = loudKey(t, info.Path)
 	}
-	g := math.Pow(10, (st.Gain+normPreamp)/20)
-	if st.Peak > 0 {
-		g = min(g, 1/st.Peak)
+	idKey := loudKey(netease.Track{ID: t.ID, ProgramID: t.ProgramID}, "")
+	if l, ok := streamLoudness(info); ok {
+		// Kept by the song's id too, for its file once downloaded.
+		p.Loud.put(idKey, l)
+		return loudGain(l)
 	}
-	return g
+	for _, k := range []string{fileKey, idKey} {
+		if l, ok := p.Loud.get(k); ok {
+			return loudGain(l)
+		}
+	}
+	var peak float64
+	if info != nil {
+		peak = info.Peak
+	}
+	if p.Normalize != nil && p.Normalize() {
+		p.measureLater(gen, s, t.Duration, fileKey, idKey)
+	}
+	return loudGain(loudness{Gain: unknownGain, Peak: peak})
+}
+
+// measureLater measures how loud the track s plays is, on a goroutine,
+// from a second stream of the same download, which waits for what has not
+// come in; keeps it under keys; and glides the gain to it, if the track
+// still plays. Another load stops it.
+func (p *Player) measureLater(gen int, s stream, durationMs int64, keys ...string) {
+	dl, _ := s.source()
+	if dl == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	p.measureStop = cancel
+	loud := p.Loud
+	go func() {
+		defer cancel()
+		ms, err := openSharedContext(ctx, dl, durationMs)
+		if err != nil {
+			return
+		}
+		l, err := measure(ctx, ms)
+		ms.Close()
+		if err != nil {
+			return
+		}
+		for _, k := range keys {
+			loud.put(k, l)
+		}
+		p.post(func() {
+			if gen != p.gen {
+				return
+			}
+			p.gain = loudGain(l)
+			if p.Normalize != nil && p.Normalize() {
+				p.fade.glideGain(p.volume*p.volume*p.gain, loudGlide)
+			}
+		})
+	}()
 }
 
 func (p *Player) Position() time.Duration {
@@ -701,6 +761,10 @@ func (p *Player) stop() {
 	if p.cancelLoad != nil {
 		p.cancelLoad()
 		p.cancelLoad = nil
+	}
+	if p.measureStop != nil {
+		p.measureStop()
+		p.measureStop = nil
 	}
 	if p.watchDone != nil {
 		close(p.watchDone)
@@ -898,7 +962,7 @@ func (p *Player) opened(gen int, t netease.Track, info *netease.Stream, s stream
 	}
 	checked := &checkedStream{stream: s}
 	p.stream, p.info = checked, info
-	p.gain = normGain(info)
+	p.gain = p.startGain(gen, t, info, s)
 	p.stretcher = newStretch(checked, p.speedOf(&t))
 	p.curSpeed = p.stretcher.speed
 	p.out = audio.NewPlayer(newShaper(p.stretcher, &p.fx, &p.fxGlide))
@@ -963,7 +1027,7 @@ func openLocal(path string, d int64) (*netease.Stream, stream, error) {
 		f.Close()
 		return nil, nil, fmt.Errorf("不支持的本地音乐格式：%s", ext)
 	}
-	st := &netease.Stream{Size: info.Size(), Type: ext, Level: "exhigh"}
+	st := &netease.Stream{Size: info.Size(), Type: ext, Level: "exhigh", Path: path}
 	if ext == "flac" {
 		st.Level = "lossless"
 	}

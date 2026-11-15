@@ -74,9 +74,9 @@ func (a *app) startDeskFly(opening bool, desk mygo.Rectangle) bool {
 	f := &a.deskFly
 	*f = deskFlight{opening: opening, from: in(btn), to: in(lyric), text: text, size: size}
 	f.win = mygo.NewFlyout(mygo.FlyoutOptions{Tray: a.tray, Hidden: true, Width: right - left, Height: bottom - top, Content: ui.View(a.deskFlyView)})
-	f.win.Show()
 	f.win.SetPosition(left, top)
 	f.win.SetAlwaysOnTop(true)
+	f.win.Show()
 	f.win.SetIgnoreMouseEvents(true)
 	return true
 }
@@ -85,6 +85,7 @@ func (a *app) startDeskFly(opening bool, desk mygo.Rectangle) bool {
 // they arrive, or taking over from it as they leave.
 func (a *app) deskFlyView(c *ui.Context) {
 	a.floatTheme(c)
+	a.lyricFace(c.Root())
 	f := &a.deskFly
 	if f.win == nil {
 		return

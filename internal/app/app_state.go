@@ -34,6 +34,10 @@ type downloadState struct {
 	// files is the file of each song in items, by its ID, for the player,
 	// which reads it off the window's goroutine; noteDownloads keeps it.
 	files atomic.Value // map[int64]string
+	// rev counts the changes to items; tracks are they as the player
+	// queues them, made once for tracksRev, not each frame.
+	rev, tracksRev int
+	tracks         []netease.Track
 }
 
 // scanCount is how many of how many songs a scan has read, as it reads.

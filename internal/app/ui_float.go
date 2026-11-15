@@ -8,6 +8,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"netease-music-mygo/internal/lyrics"
+	"netease-music-mygo/internal/netease"
 )
 
 // Windows of their own, over the others: the lyrics on the desktop, and the
@@ -32,12 +33,13 @@ func spot(x, y, w, h, foot int) (int, int) {
 
 // miniSpot returns where the mini window goes: where it was left, or in the
 // corner, clear of the lyrics.
-func miniSpot(x, y int) (int, int) {
+func (a *app) miniSpot(x, y int) (int, int) {
 	if x != 0 || y != 0 {
 		return x, y
 	}
+	w, h := a.miniSize()
 	wa := mygo.Screen.PrimaryDisplay().WorkArea
-	return wa.X + wa.Width - miniW - 24, wa.Y + wa.Height - miniH - 24
+	return wa.X + wa.Width - w - 24, wa.Y + wa.Height - h - 24
 }
 
 // floatWindow opens a window of the app's that floats over the others, on
@@ -191,6 +193,7 @@ func (a *app) deskLookOf(id string) deskLook {
 // Over the pointer it shows it can be moved, and its tools.
 func (a *app) deskView(c *ui.Context) {
 	a.floatTheme(c)
+	a.lyricFace(c.Root())
 	a.followCover()
 	s, pl := &a.settings, a.pl
 	lines, _ := a.shownLyrics()
@@ -409,6 +412,10 @@ type floatMorph struct {
 	toMini    bool
 	box, disc [2]ui.Rect // from and to, in that window
 	corner    [2]float32 // the capsule's, from and to
+	round     [2]float32 // the cover's corners, from and to
+	square    bool       // the mini window is the square, the cover filling it
+	artPx     int        // the size of the cover asked, the mini window's
+	placed    bool       // the mini window is there, not yet shown
 	at        time.Time
 	handed    bool // the mini window has come in, or gone
 	ending    int  // frames since it arrived, to leave the mini window showing
@@ -431,8 +438,12 @@ func (a *app) startMorph(x, y int, toMini bool) bool {
 	if a.motion != motionFull || a.tray == nil || a.morph.win != nil || bar.W == 0 {
 		return false
 	}
-	mini := ui.Rect{X: float32(x), Y: float32(y), W: miniW, H: miniH}
+	mw, mh := a.miniSize()
+	mini := ui.Rect{X: float32(x), Y: float32(y), W: float32(mw), H: float32(mh)}
 	disc := ui.Rect{X: mini.X + 14, Y: mini.Y + 12, W: miniDisc, H: miniDisc}
+	if at := a.more.miniCoverAt; at.W > 0 && at.X+at.W <= mini.W && at.Y+at.H <= mini.H {
+		disc = ui.Rect{X: mini.X + at.X, Y: mini.Y + at.Y, W: at.W, H: at.H}
+	}
 	left := int(min(bar.X, mini.X)) - 8
 	top := int(min(bar.Y, mini.Y)) - 8
 	w := int(max(bar.X+bar.W, mini.X+mini.W)) + 8 - left
@@ -442,17 +453,33 @@ func (a *app) startMorph(x, y int, toMini bool) bool {
 	}
 	m := &a.morph
 	*m = floatMorph{toMini: toMini}
+	// The cover keeps its corners at either end: round on a turning disc,
+	// square on a card, as large as the window's on the square.
+	barRound := min(a.barSpot.radius, cover.W/2)
+	miniRound := disc.W / 2
+	if r := a.more.miniCoverRound; r > 0 && a.more.miniCoverAt.W > 0 {
+		miniRound = min(r, disc.W/2)
+	}
 	m.box, m.disc, m.corner = [2]ui.Rect{in(bar), in(mini)}, [2]ui.Rect{in(cover), in(disc)}, [2]float32{bar.H / 2, 26}
+	m.round = [2]float32{barRound, miniRound}
+	m.square = miniRound >= 26 && disc.W >= mini.W-0.5
+	m.artPx = miniArtPx(disc.W, disc.H)
+	if tr := a.pl.Current(); tr != nil {
+		a.art.get(netease.Sized(tr.Album.PicURL, m.artPx), false) // asked now, there when it lands
+	}
 	if !toMini {
 		m.box[0], m.box[1] = m.box[1], m.box[0]
 		m.disc[0], m.disc[1] = m.disc[1], m.disc[0]
 		m.corner[0], m.corner[1] = m.corner[1], m.corner[0]
+		m.round[0], m.round[1] = m.round[1], m.round[0]
 	}
 	m.win = mygo.NewFlyout(mygo.FlyoutOptions{Tray: a.tray, Hidden: true, Width: w, Height: h, Content: ui.View(a.morphView)})
-	m.win.Show()
+	// Placed before it shows: shown first, it shows a frame where a new
+	// window goes before it moves.
 	m.win.SetPosition(left, top)
 	m.win.SetAlwaysOnTop(true)
 	m.win.SetIgnoreMouseEvents(true)
+	m.win.Show()
 	return true
 }
 
@@ -476,6 +503,14 @@ func (a *app) morphView(c *ui.Context) {
 	if m.toMini {
 		move = t
 		a.win.SetOpacity(float64(1 - easeRange(t, 0, 0.75)))
+		// The window is made at the start, but shown only as the capsule
+		// arrives, as before: made as it should show, its making is a
+		// stall the capsule waits on; shown unseen, it draws nothing until
+		// it is seen, and pops in whole at the end of its fade.
+		if !m.placed {
+			m.placed = true
+			a.makeMini()
+		}
 		if t >= handOver {
 			if !m.handed {
 				m.handed = true
@@ -499,6 +534,17 @@ func (a *app) morphView(c *ui.Context) {
 	}
 	k := 1 - (1-move)*(1-move)*(1-move)
 	box, disc := lerpRect(m.box[0], m.box[1], k), lerpRect(m.disc[0], m.disc[1], k)
+	if m.square {
+		// The cover is to fill the capsule, clipped to it: going out it
+		// grows a little ahead of it, and coming back stays filling it a
+		// little longer, so the two meet gently rather than at the last
+		// frame.
+		kc := 1 - (1-move)*(1-move)*(1-move)*(1-move)*(1-move)
+		if !m.toMini {
+			kc = k * k
+		}
+		disc = lerpRect(m.disc[0], m.disc[1], kc)
+	}
 	// Back on the bar, the solid capsule clears into the bar's glass under
 	// it: its fill thins first, its edge and shadow after, and its cover
 	// last, onto the bar's own.
@@ -508,11 +554,39 @@ func (a *app) morphView(c *ui.Context) {
 		edge = 1 - easeRange(move, 0.7, 1)
 		cover = 1 - easeRange(move, 0.8, 1)
 	}
-	ui.Box(c.Key("capsule")).Absolute().Left(box.X).Top(box.Y).Size(box.W, box.H).Radius(lerp(m.corner[0], m.corner[1], k)).
+	corner := lerp(m.corner[0], m.corner[1], k)
+	capsule := ui.Box(c.Key("capsule")).Absolute().Left(box.X).Top(box.Y).Size(box.W, box.H).Radius(corner).
 		Background(a.miniSurface().Alpha(fill)).Border(1, white.Alpha((0.14+0.12*(1-fill))*edge)).
 		Shadow(0, 12, 30, -10, ui.RGBA(0, 0, 0, 0.45*fill))
-	if tr := a.pl.Current(); tr != nil && cover > 0 {
+	tr := a.pl.Current()
+	discs := m.round[0] >= m.disc[0].W/2-0.5 && m.round[1] >= m.disc[1].W/2-0.5
+	switch {
+	case tr == nil || cover <= 0:
+	case discs && a.spins():
 		a.barDisc(c, tr, disc.W, discSmooth).Absolute().Left(disc.X).Top(disc.Y).Opacity(cover)
+	default:
+		// Its corners go from the one end's to the other's, rather than a
+		// disc that turns square as the mini window takes over; inside the
+		// capsule, which clips it to its own.
+		r := lerp(m.round[0], m.round[1], k)
+		if m.square {
+			capsule.Clip()
+		}
+		capsule.Children(func() {
+			ui.Box(c.Key("morph-cover")).Absolute().Left(disc.X-box.X).Top(disc.Y-box.Y).Size(disc.W, disc.H).Radius(r).Opacity(cover).
+				Shadow(0, 6, 18, -6, ui.RGBA(0, 0, 0, 0.4*cover*(1-b2f(m.square)))).Children(func() {
+				a.coverFill(c, tr.Album.PicURL, m.artPx, r)
+				if m.square {
+					// The square's shade, coming as the cover grows into it.
+					near := easeRange(k, 0.45, 1)
+					if !m.toMini {
+						near = 1 - easeRange(k, 0, 0.55)
+					}
+					ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Opacity(near).PassThrough().
+						Draw(func(p *ui.Painter, rr ui.Rect) { drawSquareShade(p, rr, 0) })
+				}
+			})
+		})
 	}
 	c.AnimationFrame()
 	if t < 1 {
@@ -539,23 +613,34 @@ func (a *app) morphView(c *ui.Context) {
 // placeMini shows the mini window where it goes.
 func (a *app) placeMini() {
 	s := &a.settings
+	a.makeMini()
+	x, y := a.miniSpot(s.MiniX, s.MiniY)
+	w, h := a.miniSize()
+	a.miniWin.SetOpacity(0)
+	a.miniWin.SetBounds(mygo.Rectangle{X: x, Y: y, Width: w, Height: h})
+	a.miniWin.Show()
+	a.applyMiniLayer()
+	if a.morph.win == nil {
+		a.miniWin.SetOpacity(1)
+	}
+}
+
+// makeMini makes the mini window, hidden, if it isn't made.
+func (a *app) makeMini() {
+	s := &a.settings
 	if a.miniWin == nil {
-		x, y := miniSpot(s.MiniX, s.MiniY)
-		a.miniWin = a.floatWindow(" 迷你窗口", x, y, miniW, miniH, a.miniView, a.closeMini)
+		x, y := a.miniSpot(s.MiniX, s.MiniY)
+		w, h := a.miniSize()
+		a.miniWin = a.floatWindow(" 迷你窗口", x, y, w, h, a.miniView, a.closeMini)
+		// Kept on the desktop, it goes back under the others once used.
+		a.miniWin.OnFocus(func() { a.post(a.sinkMini) })
+		a.miniWin.OnBlur(func() { a.post(a.sinkMini) })
 		a.miniWin.OnMove(func() {
 			if a.miniWin != nil && a.miniWin.IsVisible() {
 				b := a.miniWin.Bounds()
 				s.MiniX, s.MiniY = b.X, b.Y
 			}
 		})
-	}
-	x, y := miniSpot(s.MiniX, s.MiniY)
-	a.miniWin.SetOpacity(0)
-	a.miniWin.Show()
-	a.miniWin.SetPosition(x, y)
-	a.miniWin.SetAlwaysOnTop(true)
-	if a.morph.win == nil {
-		a.miniWin.SetOpacity(1)
 	}
 }
 
@@ -566,7 +651,7 @@ func (a *app) showMini() {
 		return
 	}
 	s := &a.settings
-	x, y := miniSpot(s.MiniX, s.MiniY)
+	x, y := a.miniSpot(s.MiniX, s.MiniY)
 	if !a.startMorph(x, y, true) {
 		a.placeMini()
 		a.hideMain()
@@ -589,62 +674,4 @@ func (a *app) closeMini() {
 		a.dropFloat(&a.miniWin)
 	}
 	a.showMain()
-}
-
-// miniView is what plays, in small: over its cover's colors, as Now Playing,
-// with how far it has played and how loud along with what controls it.
-func (a *app) miniView(c *ui.Context) {
-	a.floatTheme(c)
-	a.followCover()
-	pl := a.pl
-	tr := pl.Current()
-	root := ui.Box(c.Key("mini")).Fill().Radius(26).TextColor(white).
-		Background(a.miniSurface()).Border(1, white.Alpha(0.14)).DragWindow()
-	over := root.Hovered()
-	root.Children(func() {
-		ui.Row(c.Key("top")).Absolute().Top(12).Left(14).Right(12).Gap(13).AlignItems(ui.Start).Children(func() {
-			if tr == nil {
-				ui.Box(c).Size(miniDisc, miniDisc).Radius(999).Center().Background(white.Alpha(0.08)).Children(func() { mascotView(c, 52) })
-			} else {
-				a.barDisc(c, tr, miniDisc, discSmooth)
-			}
-			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
-				ui.Row(c).Gap(6).AlignItems(ui.Start).Children(func() {
-					ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
-						name, sub := "未在播放", ""
-						if tr != nil {
-							name, sub = tr.Name, firstArtist(tr)
-						}
-						ui.Text(c, name).FontSize(14).FontWeight(700).SingleLine()
-						ui.Text(c, sub).FontSize(12).TextColor(white.Alpha(0.62)).SingleLine()
-					})
-					ink := white.Alpha(0.35)
-					if over {
-						ink = white.Alpha(0.85)
-					}
-					if iconButton(c.Key("back"), iconExpand, 14, ink, "回到主窗口").Size(26, 26).Clicked() {
-						a.closeMini()
-					}
-				})
-				ui.Row(c).Gap(2).AlignItems(ui.Center).Margin(3, 0, 0, -6).Children(func() {
-					if iconButton(c.Key("prev"), iconPrev, 14, white, "上一首").Size(30, 28).Clicked() {
-						pl.Prev()
-					}
-					if playButton(c.Key("play"), pl.Playing(), 18, white).Size(30, 28).Clicked() {
-						pl.TogglePlay()
-					}
-					if iconButton(c.Key("next"), iconNext, 14, white, "下一首").Size(30, 28).Clicked() {
-						pl.Next()
-					}
-					ui.Spacer(c)
-					a.volumeSlider(c, white.Alpha(0.75), white.Alpha(0.18), 92)
-				})
-			})
-		})
-		a.scrubber(c.Key("mini-scrub"), &a.miniScrub, white.Alpha(0.18), white.Alpha(0.85), 14, ui.Color{}).
-			Absolute().Left(18).Right(18).Bottom(5)
-	})
-	if pl.Playing() {
-		c.After(time.Second)
-	}
 }

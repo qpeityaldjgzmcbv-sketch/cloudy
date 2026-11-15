@@ -328,7 +328,7 @@ func TestCacheKeepsOnlyKnownLevels(t *testing.T) {
 func TestStreamSizeIsNotTrusted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("short")) }))
 	defer srv.Close()
-	dl := startDownload(srv.URL, 1<<40, nil, nil)
+	dl := startDownload(srv.URL, 1<<40, nil, nil, nil)
 	defer dl.Close()
 	dl.mu.Lock()
 	n := cap(dl.data)

@@ -460,12 +460,8 @@ func (a *app) settingsBody(c *ui.Context) {
 		key, scroll, label = "search", &a.settingsView.searchScroll, "搜索"
 	}
 	viewport := ui.Box(c.Key("settings-viewport")).Grow(1).Shrink(1).MinWidth(0)
-	fade := easeRange(scroll.Y, 0, 24)
-	if fade > 0 || a.settings.GlobalGlass {
-		// Keep one scratch layer for the settings, while each category's
-		// scroll keeps its own input state and position.
-		viewport.Effect(scrollEdgeFade{depth: 44, top: fade})
-	}
+	// Keep settings text on the final target. An edge Effect resamples the
+	// entire viewport, softening even the text well outside its fade band.
 	viewport.Children(func() {
 		ui.Scroll(c.Key(key)).Label(label+"设置项").TrackScroll(scroll).Fill().Padding(0, 30, 30, 18).Children(func() {
 			if k.query == "" {
@@ -562,8 +558,8 @@ func (a *app) settingsAccountPage(k *settingsKit) {
 			})
 			return
 		}
-		k.rowOf(settingRow{label: "计入网易云听歌记录", desc: "使用未公开的接口，有一定账号风险",
-			tip: "听完或听满 30 秒的歌会计入账号的听歌时长和排行；这是网易云未公开的接口，非官方客户端使用存在一定账号风险，默认关闭", warn: true}, func() {
+		k.rowOf(settingRow{label: "计入网易云听歌记录", desc: "以网易云 Mac 客户端的身份上报，理论上有账号风险，社区暂无封号案例",
+			tip: "听完或听满 30 秒的歌会计入最近播放、听歌排行和累计听歌，网易云几分钟后才显示。这是网易云未公开的接口，以官方 Mac 客户端的身份发送：理论上存在账号风险，目前社区里还没有因此被封号的案例；网易云也可能随时不再计入。默认关闭", warn: true}, func() {
 			k.toggle("scrobble", "计入网易云听歌记录", &s.Scrobble, a.profile == nil, nil)
 		})
 	})
@@ -832,41 +828,7 @@ func (a *app) settingsAppearancePage(k *settingsKit) {
 				a.changed()
 			})
 		})
-		k.row("字体", "界面、歌词与评论使用的字体", func() {
-			fonts := a.fontChoices()
-			a.loadFontFiles()
-			// The font chosen in the picker shows among those on offer.
-			if cur := fontOf(s.Font); cur.custom() {
-				fonts = append(fonts[:len(fonts):len(fonts)], cur)
-			}
-			labels := make([]string, 0, len(fonts)+1)
-			chosen := fontOf(s.Font).label
-			for _, f := range fonts {
-				labels = append(labels, f.label)
-			}
-			labels = append(labels, moreFonts)
-			own := func(label string) string {
-				for _, f := range fonts {
-					if f.label == label && f.id != "" {
-						return f.family
-					}
-				}
-				return defaultFontFamily()
-			}
-			if a.paneSelect(c.Key("font"), "字体", &chosen, labels, own) {
-				if chosen == moreFonts {
-					a.openFontPicker()
-					return
-				}
-				for _, f := range fonts {
-					if f.label == chosen {
-						s.Font = f.id
-					}
-				}
-				a.loadFont()
-				a.changed()
-			}
-		})
+		a.fontRows(c, k)
 		k.rowOf(settingRow{label: "侧边栏大小", desc: "歌单、专辑的封面和文字大小",
 			tip: "拖动侧边栏右边缘可以调整宽度，双击边缘恢复"}, func() {
 			labels := make([]string, len(sidebarSizes))
@@ -940,7 +902,7 @@ func (a *app) settingsEffectsPage(k *settingsKit) {
 		k.row("液态玻璃播放栏", "播放栏化作悬浮的玻璃胶囊，透出并折射其下的内容", func() {
 			part("liquid-glass", "液态玻璃播放栏", &s.LiquidGlass, a.leavePowerSaver)
 		})
-		k.row("界面玻璃", "菜单、弹窗和设置面板使用玻璃材质，内部卡片保持平面", func() {
+		k.row("界面玻璃", "菜单（含托盘菜单）、弹窗和设置面板使用玻璃材质，内部卡片保持平面", func() {
 			part("glass-panels", "界面玻璃", &s.GlassPanels, a.leavePowerSaver)
 		})
 		refractive := s.playerGlass() || s.GlobalGlass
@@ -1180,7 +1142,7 @@ func (a *app) settingsAboutPage(k *settingsKit) {
 			})
 			// Installing in the background goes with the checks,
 			// which find what it installs.
-			k.sub("自动安装更新", "在后台下载并装好新版本，不弹窗，下次打开软件时生效", s.UpdateChecks, func() {
+			k.sub("自动安装更新", "后台发现新版本时直接装好，下次打开软件时生效；手动检查仍会先问你", s.UpdateChecks, func() {
 				k.toggle("update-downloads", "自动安装更新", &s.UpdateInstall, false, nil)
 			})
 			k.row("当前版本 "+mygo.App.Version(), "新版本来自 GitHub 的 nya-owo/cloudy", func() {

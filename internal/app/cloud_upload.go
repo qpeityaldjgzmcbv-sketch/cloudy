@@ -162,11 +162,17 @@ func (a *app) pumpUpload() {
 		return
 	}
 	meta := netease.CloudUploadMeta{Title: u.Title, Artist: u.Artist, Album: u.Album}
-	q.run(u, a.post, func(ctx context.Context, progress func(done, size int64)) func() {
+	q.run(u, a.post, a.postQuiet(a.uploadProgressShown), func(ctx context.Context, progress func(done, size int64)) func() {
 		_, err := uploadToCloud(ctx, u.Path, meta, progress)
 		return func() { a.finishUpload(err) }
 	})
 	q.size = u.Size
+}
+
+// uploadProgressShown reports whether how far the song going up has come
+// is on screen: on the cloud drive's page, or in the queue's window.
+func (a *app) uploadProgressShown() bool {
+	return a.up.view.open || a.route.page == pageCloud && !a.nowPlaying
 }
 
 // finishUpload says how the song went, and starts the next one queued.

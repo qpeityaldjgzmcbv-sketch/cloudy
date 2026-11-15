@@ -13,9 +13,9 @@ var updateMirrors = []string{
 }
 
 // manualDownloadURL is the cloud drive share of the installers, offered
-// when an update cannot be fetched at all: empty until the author shares
-// one.
-var manualDownloadURL = ""
+// when an update cannot be fetched at all: the author's Quark folder, which
+// each release's installers are put in, the link and its code the same.
+var manualDownloadURL = "https://pan.quark.cn/s/58e05deef9f6?pwd=zBds"
 
 // feedbackBilibiliUID is the author's Bilibili account, whose private
 // messages feedback goes to.

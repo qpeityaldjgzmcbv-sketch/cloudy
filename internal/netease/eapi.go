@@ -83,20 +83,42 @@ func eapiPost(path string, data map[string]any, out any) error {
 }
 
 func eapiPostContext(ctx context.Context, path string, data map[string]any, out any) error {
+	return eapiSend(ctx, eapiAs{}, path, data, out)
+}
+
+// eapiAs says how an eapi request goes when not as the app's usual client:
+// to another host, speaking as another client, with another user agent.
+// Unset fields keep the usual ones.
+type eapiAs struct {
+	domain  string
+	client  map[string]string
+	ua      string
+	cookies []*http.Cookie // the session to send, if not the jar's
+}
+
+func eapiSend(ctx context.Context, as eapiAs, path string, data map[string]any, out any) error {
+	client := eapiClient
+	if as.client != nil {
+		client = as.client
+	}
 	header := map[string]string{
-		"osver":       eapiClient["osver"],
+		"osver":       client["osver"],
 		"deviceId":    device(),
-		"os":          eapiClient["os"],
-		"appver":      eapiClient["appver"],
+		"os":          client["os"],
+		"appver":      client["appver"],
 		"versioncode": "140",
 		"mobilename":  "",
 		"buildver":    fmt.Sprint(time.Now().Unix()),
 		"resolution":  "1920x1080",
-		"channel":     eapiClient["channel"],
+		"channel":     client["channel"],
 		"requestId":   fmt.Sprintf("%d_%04d", time.Now().UnixMilli(), time.Now().Nanosecond()%1000),
 		"__csrf":      "",
 	}
-	for _, c := range httpClient.Jar.Cookies(siteURL) {
+	cookies := as.cookies
+	if cookies == nil {
+		cookies = httpClient.Jar.Cookies(siteURL)
+	}
+	for _, c := range cookies {
 		switch c.Name {
 		case "MUSIC_U", "NMTID":
 			header[c.Name] = c.Value
@@ -110,7 +132,14 @@ func eapiPostContext(ctx context.Context, path string, data map[string]any, out 
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", eapiDomain+"/eapi/"+strings.TrimPrefix(path, "/api/"),
+	domain, ua := eapiDomain, eapiUA
+	if as.domain != "" {
+		domain = as.domain
+	}
+	if as.ua != "" {
+		ua = as.ua
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", domain+"/eapi/"+strings.TrimPrefix(path, "/api/"),
 		strings.NewReader(url.Values{"params": {params}}.Encode()))
 	if err != nil {
 		return err
@@ -120,7 +149,7 @@ func eapiPostContext(ctx context.Context, path string, data map[string]any, out 
 		cookie = append(cookie, url.QueryEscape(k)+"="+url.QueryEscape(v))
 	}
 	req.Header.Set("Cookie", strings.Join(cookie, "; "))
-	req.Header.Set("User-Agent", eapiUA)
+	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	// Sent by hand: the jar would add the site's cookies to these.
 	res, err := (&http.Client{Timeout: httpClient.Timeout}).Do(req)
@@ -128,8 +157,9 @@ func eapiPostContext(ctx context.Context, path string, data map[string]any, out 
 		return err
 	}
 	defer res.Body.Close()
-	// Keep what it sets for the site, whichever host set it.
-	if set := res.Cookies(); len(set) > 0 {
+	// Keep what it sets for the site, whichever host set it: not for a
+	// session of its own, which may no longer be the one signed in.
+	if set := res.Cookies(); len(set) > 0 && as.cookies == nil {
 		for _, c := range set {
 			c.Domain = ""
 			c.Path = "/"

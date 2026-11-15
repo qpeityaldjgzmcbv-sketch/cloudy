@@ -28,6 +28,24 @@ type fader struct {
 	start time.Time
 	dur   time.Duration
 	gen   int // counts fades, to stop the goroutine of one overtaken
+
+	// A change of gain glides from gainFrom to gain over gainDur.
+	gainFrom  float64
+	gainStart time.Time
+	gainDur   time.Duration
+	gainGen   int // counts glides, as gen counts fades
+}
+
+// gainAt returns the gain at now, gliding.
+func (f *fader) gainAt(now time.Time) float64 {
+	if f.gainDur <= 0 {
+		return f.gain
+	}
+	t := now.Sub(f.gainStart).Seconds() / f.gainDur.Seconds()
+	if t >= 1 {
+		return f.gain
+	}
+	return f.gainFrom + (f.gain-f.gainFrom)*(0.5-0.5*math.Cos(math.Pi*t))
 }
 
 // level returns the level at now, easing in and out.
@@ -41,7 +59,7 @@ func (f *fader) level(now time.Time) float64 {
 
 func (f *fader) apply(now time.Time) {
 	if f.out != nil {
-		f.out.SetVolume(f.gain * f.level(now))
+		f.out.SetVolume(f.gainAt(now) * f.level(now))
 	}
 }
 
@@ -60,17 +78,50 @@ func (f *fader) detach() (level, gain float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.gen++
-	level = f.level(time.Now())
-	f.out, f.from, f.to, f.dur = nil, 1, 1, 0
-	return level, f.gain
+	now := time.Now()
+	level, gain = f.level(now), f.gainAt(now)
+	f.gainGen++
+	f.out, f.from, f.to, f.dur, f.gainDur = nil, 1, 1, 0, 0
+	return level, gain
 }
 
 // setGain changes the volume and gain, at once.
 func (f *fader) setGain(g float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.gain = g
+	f.gain, f.gainDur = g, 0
+	f.gainGen++
 	f.apply(time.Now())
+}
+
+// glideGain moves the volume and gain to g over d, as a track's loudness
+// comes to be known while it plays.
+func (f *fader) glideGain(g float64, d time.Duration) {
+	f.mu.Lock()
+	now := time.Now()
+	f.gainFrom, f.gain, f.gainStart, f.gainDur = f.gainAt(now), g, now, d
+	f.gainGen++
+	gen := f.gainGen
+	f.mu.Unlock()
+	go func() {
+		tick := time.NewTicker(15 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			f.mu.Lock()
+			if f.gainGen != gen {
+				f.mu.Unlock()
+				return
+			}
+			now := time.Now()
+			f.apply(now)
+			finished := now.Sub(f.gainStart) >= f.gainDur
+			f.mu.Unlock()
+			if finished {
+				return
+			}
+			<-tick.C
+		}
+	}()
 }
 
 // silent reports whether the level is at nothing, faded out.

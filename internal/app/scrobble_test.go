@@ -15,7 +15,7 @@ func TestScrobble(t *testing.T) {
 	defer func() { scrobble = old }()
 	defer func(works bool) { scrobbleWorks = works }(scrobbleWorks)
 	got := make(chan [2]int64, 8)
-	scrobble = func(id, source int64, seconds int, ended bool) error {
+	scrobble = func(id, source int64, seconds int) error {
 		got <- [2]int64{id, int64(seconds)}
 		return nil
 	}
@@ -30,7 +30,8 @@ func TestScrobble(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 	a.settings.Scrobble = true
-	// Hidden, as NetEase counts none of them: not told even when turned on.
+	scrobbleWorks = false
+	// Hidden: not told even when turned on.
 	a.listened(song, time.Minute, true)
 	select {
 	case <-got:

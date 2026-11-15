@@ -45,7 +45,11 @@ type Track struct {
 	Album    Album    `json:"al"`
 	Duration int64    `json:"dt"` // milliseconds
 	Fee      int      `json:"fee"`
-	Alias    []string `json:"alia"`
+	// No and Cd are where the track sits in its album: its number, and
+	// the disc's; 0 where unknown.
+	No    Num      `json:"no,omitempty"`
+	Cd    Num      `json:"cd,omitempty"`
+	Alias []string `json:"alia"`
 	// Reason says why a daily recommendation was picked.
 	Reason string `json:"reason"`
 	// Privilege is what the listener may do with the track, if known.
@@ -499,7 +503,10 @@ func (e *StreamError) Unwrap() error { return e.Cause }
 
 // Stream is where a track streams from, and what it is.
 type Stream struct {
-	URL  string `json:"-"`
+	URL string `json:"-"`
+	// Path is the file the song plays from, a downloaded or the
+	// listener's own, or "" for a stream of NetEase's.
+	Path string `json:"-"`
 	Size int64  `json:"size"` // in bytes
 	// Type is the format: mp3, or flac for the lossless levels.
 	Type string `json:"type"`

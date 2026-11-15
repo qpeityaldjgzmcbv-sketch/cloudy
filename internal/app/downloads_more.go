@@ -126,6 +126,7 @@ func (a *app) fixDownloads() {
 						a.dl.items[i].Track, a.dl.items[i].Tagged = it.Track, tagged
 					}
 				}
+				a.dl.rev++
 				a.saveDownloads()
 			})
 		}

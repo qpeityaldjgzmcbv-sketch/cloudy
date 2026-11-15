@@ -29,6 +29,10 @@ type Item struct {
 	// Tagged says its file carries its title, cover, lyrics and NetEase ID,
 	// which Cloudy wrote into it.
 	Tagged bool `json:"tagged,omitempty"`
+	// Numbered says the file's track and disc numbers were read into
+	// Track (No, Cd), which indexes before 1.2.13 lack: such a file is
+	// read once more.
+	Numbered bool `json:"numbered,omitempty"`
 }
 
 // Store is where the index of the saved songs is kept.
@@ -225,6 +229,15 @@ func FileName(tr netease.Track, ext string) string {
 		name = "未知歌曲"
 	}
 	return truncate(name, 120) + "." + strings.TrimPrefix(strings.ToLower(ext), ".")
+}
+
+// LyricFileName names one half of a split lyric export using the song's title.
+func LyricFileName(tr netease.Track, part, ext string) string {
+	title := strings.Trim(clean(strings.TrimSpace(tr.Name)), " ._")
+	if title == "" {
+		title = "未知歌曲"
+	}
+	return truncate(title, 100) + "-" + part + "." + ext
 }
 
 // clean takes out the characters Windows, macOS and Linux refuse in a name,

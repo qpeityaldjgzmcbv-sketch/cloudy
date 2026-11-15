@@ -1,6 +1,8 @@
 package app
 
 import (
+	"errors"
+	"log"
 	"time"
 
 	"netease-music-mygo/internal/netease"
@@ -13,12 +15,12 @@ var scrobble = netease.Scrobble
 // skip a few seconds in should not.
 const scrobbleAfter = 30 * time.Second
 
-// scrobbleWorks says whether NetEase counts the plays told it. It does not:
-// tried on a real account on 2026-11-07, NetEase answers each log of
-// /api/feedback/weblog (eapi, weapi or plain) with success and counts none
-// of them, in recent plays, the week's ranking or the total. Until a log it
-// counts is found, the setting is hidden and nothing is sent.
-var scrobbleWorks = false
+// scrobbleWorks says whether NetEase counts the plays told it, so whether
+// the setting shows. The web player's log counted none of them (tried on
+// 2026-11-07); the macOS client's, which netease.Scrobble now sends, is
+// what other clients found NetEase counts. Turned back off, the setting
+// hides and nothing is sent.
+var scrobbleWorks = true
 
 // listened tells NetEase that the listener played t for played, if they
 // asked for their plays to count there: a NetEase song, signed in, heard
@@ -34,5 +36,11 @@ func (a *app) listened(t netease.Track, played time.Duration, ended bool) {
 	if ended && t.Duration > 0 {
 		seconds = int(t.Duration / 1000)
 	}
-	go scrobble(t.ID, 0, seconds, ended)
+	go func() {
+		// Whether NetEase counted it cannot be known here: it answers
+		// success either way, and shows plays minutes later.
+		if err := scrobble(t.ID, 0, seconds); err != nil && !errors.Is(err, netease.ErrNotSignedIn) {
+			log.Printf("scrobble %d: %v", t.ID, err)
+		}
+	}()
 }

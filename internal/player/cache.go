@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"netease-music-mygo/internal/netease"
@@ -18,14 +19,33 @@ import (
 // its stream was beside it in <id>-<level>.json. Once they take more than
 // the limit, those played longest ago go first.
 type Cache struct {
-	mu    sync.Mutex
-	dir   string // where the songs are, which the listener may move
-	limit int64  // in bytes; 0 keeps nothing
+	mu      sync.Mutex
+	cond    *sync.Cond
+	dir     string // where the songs are, which the listener may move
+	limit   int64  // in bytes; 0 keeps nothing
+	fresh   map[string]int
+	dirty   bool
+	waiting int
+	running bool
+}
+
+// pruneHook, when set, runs at the start of a prune. Tests hold it to
+// show that keeping a song does not wait for the directory to be cleaned.
+var pruneHook atomic.Pointer[func()]
+
+func setPruneHook(fn func()) {
+	if fn == nil {
+		pruneHook.Store(nil)
+		return
+	}
+	pruneHook.Store(&fn)
 }
 
 // NewCache returns a cache in dir of limit bytes.
 func NewCache(dir string, limit int64) *Cache {
-	return &Cache{dir: dir, limit: limit}
+	c := &Cache{dir: dir, limit: limit, fresh: map[string]int{}}
+	c.cond = sync.NewCond(&c.mu)
+	return c
 }
 
 // SetLimit changes how much the cache may take, and drops what is over.
@@ -33,7 +53,7 @@ func (c *Cache) SetLimit(limit int64) {
 	c.mu.Lock()
 	c.limit = limit
 	c.mu.Unlock()
-	c.prune("")
+	c.pruneWait()
 }
 
 // Dir returns the folder the songs are kept in.
@@ -59,7 +79,7 @@ func (c *Cache) SetDir(dir string) {
 	}
 	dropParts(old, time.Hour)
 	os.Remove(old) // only once it is empty
-	c.prune("")
+	c.pruneWait()
 }
 
 func cacheKey(id int64, level string) string { return fmt.Sprintf("%d-%s", id, level) }
@@ -110,12 +130,11 @@ func (c *Cache) lookup(id int64, level string) (*download, *netease.Stream, bool
 func (c *Cache) download(id int64, st *netease.Stream) *download {
 	part := c.part(st)
 	if part == nil {
-		part, _ = os.CreateTemp("", "cloudy-stream-*.part")
-		return startDownload(st.URL, st.Size, part, nil)
+		part, _ = os.CreateTemp("", streamSpools)
+		return startDownload(st.URL, st.Size, part, nil, nil)
 	}
-	return startDownload(st.URL, st.Size, part, func(path string, n int64) (string, bool) {
-		return c.keep(id, st, path, n)
-	})
+	keep, settle := c.keeper(id, st)
+	return startDownload(st.URL, st.Size, part, keep, settle)
 }
 
 // part makes a file for a song of the stream st to come into, or returns
@@ -142,9 +161,22 @@ func (c *Cache) part(st *netease.Stream) *os.File {
 	return f
 }
 
+func (c *Cache) keeper(id int64, st *netease.Stream) (func(string, int64) (string, bool), func(string)) {
+	return func(part string, n int64) (string, bool) {
+		return c.keep(id, st, part, n)
+	}, c.settled
+}
+
+func (c *Cache) settled(path string) {
+	c.forget(path)
+	if c.kick() {
+		go c.pruneLoop()
+	}
+}
+
 // keep keeps the song of the stream st, n bytes, from the file part, which
-// is closed, and drops what is over the limit then. It returns where the
-// song is: kept, or still at part.
+// is closed. It returns where the song is: kept, or still at part. The
+// caller settles the file once it has opened it.
 func (c *Cache) keep(id int64, st *netease.Stream, part string, n int64) (string, bool) {
 	c.mu.Lock()
 	limit, dir := c.limit, c.dir
@@ -163,11 +195,18 @@ func (c *Cache) keep(id int64, st *netease.Stream, part string, n int64) (string
 	key := cacheKey(id, kept.Level)
 	meta, _ := json.Marshal(kept)
 	path := filepath.Join(dir, key+"."+kept.Type)
+	// keep is called with the download lock held, and the decoder waits
+	// on that lock. Protect the name before it exists, then make sure a
+	// clean starts after the file is there: one may already have looked.
+	c.protect(path)
 	if os.Rename(part, path) != nil {
+		c.forget(path)
 		return part, false
 	}
 	os.WriteFile(filepath.Join(dir, key+".json"), meta, 0o600)
-	c.prune(path)
+	if c.kick() {
+		go c.pruneLoop()
+	}
 	return path, true
 }
 
@@ -219,26 +258,111 @@ func (c *Cache) remove(path string) {
 	os.Remove(strings.TrimSuffix(path, filepath.Ext(path)) + ".json")
 }
 
-// prune drops the songs played longest ago until the rest fit the limit,
-// but keep, the song just kept.
-func (c *Cache) prune(keep string) {
+func (c *Cache) protect(path string) {
+	c.mu.Lock()
+	c.fresh[path]++
+	c.mu.Unlock()
+}
+
+func (c *Cache) forget(path string) {
+	c.mu.Lock()
+	if c.fresh[path] > 1 {
+		c.fresh[path]--
+	} else {
+		delete(c.fresh, path)
+	}
+	c.cond.Broadcast()
+	c.mu.Unlock()
+}
+
+// kick queues a clean and reports whether this call must start it.
+func (c *Cache) kick() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	dropParts(c.dir, time.Hour)
-	songs := songsIn(c.dir)
+	c.dirty = true
+	c.cond.Broadcast()
+	if c.running {
+		return false
+	}
+	c.running = true
+	return true
+}
+
+// pruneWait runs a clean to the end. Callers that change the limit or the
+// directory expect songs over the limit to be gone before they return.
+func (c *Cache) pruneWait() {
+	c.mu.Lock()
+	c.dirty = true
+	c.waiting++
+	start := !c.running
+	if start {
+		c.running = true
+		c.mu.Unlock()
+		c.pruneLoop()
+		c.mu.Lock()
+	} else {
+		c.cond.Broadcast()
+		for c.running {
+			c.cond.Wait()
+		}
+	}
+	c.waiting--
+	c.mu.Unlock()
+}
+
+// pruneLoop drops what is over the limit away from the download lock.
+// A pass keeps songs still being handed to playback. Work that arrives
+// during the pass is done again; otherwise it waits for that hand-off.
+func (c *Cache) pruneLoop() {
+	for {
+		c.mu.Lock()
+		dir, limit := c.dir, c.limit
+		c.dirty = false
+		c.mu.Unlock()
+		c.removeOver(dir, limit)
+		c.mu.Lock()
+		if c.dirty {
+			c.mu.Unlock()
+			continue
+		}
+		if len(c.fresh) > 0 && c.waiting == 0 {
+			c.cond.Wait()
+			c.mu.Unlock()
+			continue
+		}
+		c.running = false
+		c.cond.Broadcast()
+		c.mu.Unlock()
+		return
+	}
+}
+
+// removeOver drops the songs played longest ago until the rest fit the limit.
+func (c *Cache) removeOver(dir string, limit int64) {
+	if dir == "" {
+		return
+	}
+	dropParts(dir, time.Hour)
+	songs := songsIn(dir)
+	if hook := pruneHook.Load(); hook != nil {
+		(*hook)()
+	}
 	slices.SortFunc(songs, func(a, b cachedSong) int { return a.used.Compare(b.used) })
 	var total int64
 	for _, f := range songs {
 		total += f.size
 	}
 	for _, f := range songs {
-		if total <= c.limit {
+		if total <= limit {
 			return
 		}
-		if f.path != keep {
+		c.mu.Lock()
+		_, fresh := c.fresh[f.path]
+		if !fresh {
 			c.remove(f.path)
 			total -= f.size
 		}
+		c.mu.Unlock()
 	}
 }
 
@@ -246,10 +370,25 @@ func (c *Cache) prune(keep string) {
 // by an app that quit as they came, untouched for longer than idle: one
 // coming in is written to every moment.
 func dropParts(dir string, idle time.Duration) {
+	dropPartsLike(dir, "*.part", idle)
+}
+
+// streamSpools is the name of the temporary files of songs the cache does
+// not keep, in the system's temporary folder.
+const streamSpools = "cloudy-stream-*.part"
+
+// DropStreamSpools removes the temporary files of songs streamed without
+// being kept that an app which crashed, or was killed, left behind: those
+// untouched for an hour. One still playing is in use, and stays.
+func DropStreamSpools() {
+	dropPartsLike(os.TempDir(), streamSpools, time.Hour)
+}
+
+func dropPartsLike(dir, pattern string, idle time.Duration) {
 	if dir == "" {
 		return
 	}
-	parts, _ := filepath.Glob(filepath.Join(dir, "*.part"))
+	parts, _ := filepath.Glob(filepath.Join(dir, pattern))
 	for _, path := range parts {
 		if info, err := os.Stat(path); err == nil && time.Since(info.ModTime()) > idle {
 			os.Remove(path)

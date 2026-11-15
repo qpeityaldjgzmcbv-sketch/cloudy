@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"image"
 	"image/png"
@@ -117,46 +118,40 @@ func TestGlowFrames(t *testing.T) {
 	settle("glow-lyric")
 }
 
-// Nothing glows ahead of the singer. A word's color at no alpha falls back
-// to the color of the text around it, which lit the words to come in full,
-// blurred, the brightest thing on the line.
+// Nothing glows ahead of the singer, regardless of font metrics or other playback-view effects.
 func TestGlowOnlyWhereSung(t *testing.T) {
-	frame := func(glow bool) *image.RGBA {
-		a := newTestApp()
-		a.settings.NpLight, a.settings.GlowLevel = glow, 0.5
-		a.pl.Cue([]netease.Track{{ID: 1, Name: "x", Duration: 180000}})
-		a.pl.SetLyrics([]lyrics.Line{{At: time.Second, End: 9 * time.Second, Text: "Why do the stars", Timed: true, Words: []lyrics.Word{
-			{Text: "Why ", Start: time.Second, End: 2 * time.Second},
-			{Text: "do the stars", Start: 6 * time.Second, End: 8 * time.Second},
-		}}})
-		a.pl.Seek(3 * time.Second)
-		a.nowPlaying = true
-		tt := ui.NewTester(a.view, 1100, 760)
-		tt.SetDark(true)
-		tt.Advance(2 * time.Second)
-		tt.Frame()
-		tt.Advance(2 * time.Second)
-		tt.Frame()
+	line := lyrics.Line{At: time.Second, End: 9 * time.Second, Text: "Why do the stars", Timed: true, Words: []lyrics.Word{
+		{Text: "Why ", Start: time.Second, End: 2 * time.Second},
+		{Text: "do the stars", Start: 6 * time.Second, End: 8 * time.Second},
+	}}
+	frame := func(line lyrics.Line) *image.RGBA {
+		a := &app{settings: settings{GlowLevel: 0.5}, glowColor: white}
+		tt := ui.NewTester(func(c *ui.Context) {
+			c.Root().Background(ui.RGB(0, 0, 0))
+			ui.Box(c).Absolute().Left(20).Top(20).Width(500).Height(100).Children(func() {
+				a.lineGlow(c, line, 3*time.Second, linesStyle{size: 40, weight: 800, lineHeight: 1.25})
+			})
+		}, 600, 160)
 		return tt.Image()
 	}
-	on, off := frame(true), frame(false)
-	// The left of the pane has the word sung; the right of it, those to come.
-	sum := func(img *image.RGBA, x0, x1 int) int {
-		s := img.Bounds().Dx() / 1100
-		n := 0
-		for y := 60; y < 300; y++ {
-			for x := x0; x < x1; x++ {
-				c := img.RGBAAt(x*s, y*s)
-				n += int(c.R)
+	actual := frame(line)
+	// Removing words that have not started must leave the glow layer identical.
+	// Both renders use the same font and geometry, without a guessed split pixel.
+	line.Words = line.Words[:1]
+	expected := frame(line)
+	if !bytes.Equal(actual.Pix, expected.Pix) {
+		t.Fatal("words that have not started changed the glow layer")
+	}
+	lit := false
+	for y := 0; y < actual.Bounds().Dy(); y++ {
+		for x := 0; x < actual.Bounds().Dx(); x++ {
+			pixel := actual.RGBAAt(x, y)
+			if pixel.R > 0 || pixel.G > 0 || pixel.B > 0 {
+				lit = true
 			}
 		}
-		return n
 	}
-	const split = 560 // past "Why ", in the words to come
-	if diff := sum(on, split, 900) - sum(off, split, 900); diff > 400 || diff < -400 {
-		t.Errorf("the words to come changed by %d with the glow", diff)
-	}
-	if diff := sum(on, 470, split) - sum(off, 470, split); diff < 400 {
-		t.Errorf("the word sung gained only %d with the glow", diff)
+	if !lit {
+		t.Fatal("the word already sung did not glow")
 	}
 }

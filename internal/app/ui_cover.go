@@ -96,6 +96,7 @@ func (a *app) npCover(c *ui.Context, tr *netease.Track, art *artwork, size float
 		cs.off = ui.Point{X: -float32(dir) * far}
 	}
 	wrap := ui.Box(c.Key(coverKey{tr.ID, cs.gen})).Size(size, size).AlignSelf(ui.Start).Label("专辑封面")
+	a.coverContext(wrap, tr)
 	a.npSpot.cover = wrap.LayoutBounds()
 	a.flown(wrap)
 	entering := cs.enter != 0
@@ -199,6 +200,7 @@ func (a *app) npCover(c *ui.Context, tr *netease.Track, art *artwork, size float
 	tilt := ui.Animation{Spring: ui.SpringOptions{Duration: 500 * time.Millisecond, Bounce: 0.2}}
 	ry := wrap.AnimateTo("ry", tx*7+swing, tilt)
 	rx := wrap.AnimateTo("rx", -ty*7, tilt)
+	a.npSpot.tilt = ui.Point{X: rx, Y: ry}
 	shine := float32(0)
 	if over {
 		shine = 1
@@ -225,7 +227,12 @@ func (a *app) npCover(c *ui.Context, tr *netease.Track, art *artwork, size float
 			scale *= 1.02
 		}
 		a.npCoverScale = scale
-		box := ui.Box(c).Fill().Radius(14).Shadow(0, 30, 60, -12, ui.RGBA(0, 0, 0, 0.55))
+		box := ui.Box(c).Fill().Radius(14)
+		if !a.npFlying() {
+			// During a flight one independent shadow follows both images.
+			// At rest retain the original shadow, including its pose.
+			box.Shadow(0, 30, 60, -12, ui.RGBA(0, 0, 0, 0.55))
+		}
 		if math.Abs(float64(rx))+math.Abs(float64(ry)) > 0.05 {
 			// In depth only while tilted: flat, it draws as an image does.
 			box.RotateX(rx).RotateY(ry).Perspective(900)

@@ -33,6 +33,12 @@ type settings struct {
 	Appearance string `json:"appearance"`
 	// Font is the font of the app's text (uiFonts): empty for the default.
 	Font string `json:"font,omitempty"`
+	// LyricFont is the font of the lyrics, in Now Playing and on the
+	// desktop, the same ids as Font: empty follows Font.
+	LyricFont string `json:"lyricFont,omitempty"`
+	// AlbumGrid shows the albums of local music and downloads sorted by
+	// album as a grid of covers rather than a list (ui_album_grid.go).
+	AlbumGrid bool `json:"albumGrid,omitempty"`
 	// LiquidGlass floats the player bar as a capsule of glass. Off is kept
 	// too, without omitempty: left out, it would load as the default.
 	LiquidGlass  bool `json:"liquidGlass"`
@@ -120,6 +126,13 @@ type settings struct {
 	// MiniX and MiniY are where the mini window was left.
 	MiniX int `json:"miniX,omitempty"`
 	MiniY int `json:"miniY,omitempty"`
+	// MiniW and MiniH are how large the mini window was left, 0 for as it
+	// was at first.
+	MiniW int `json:"miniW,omitempty"`
+	MiniH int `json:"miniH,omitempty"`
+	// MiniDesk keeps the mini window down on the desktop, under the other
+	// windows, rather than over them.
+	MiniDesk bool `json:"miniDesk,omitempty"`
 	// Smoke makes the progress bars comets trailing smoke as music plays,
 	// for a few percent of a core: the listener turns it on.
 	Smoke bool `json:"smoke"`

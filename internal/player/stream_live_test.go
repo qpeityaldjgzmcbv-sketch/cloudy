@@ -17,7 +17,7 @@ func TestStreamLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	dl := startDownload(st.URL, st.Size, nil, nil)
+	dl := startDownload(st.URL, st.Size, nil, nil, nil)
 	s, err := openMP3Stream(dl, 278961)
 	if err != nil {
 		t.Fatal(err)

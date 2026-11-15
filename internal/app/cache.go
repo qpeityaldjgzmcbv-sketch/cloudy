@@ -39,6 +39,17 @@ func newSongCache(folder string, mb int) *player.Cache {
 	return player.NewCache(dir, int64(mb)<<20)
 }
 
+// openLoudness opens what the player measured of how loud songs are, kept
+// in loudness.json in the user data directory: a few bytes a song, which
+// clearing the cache leaves, so they need not be measured again.
+func openLoudness() *player.Loudness {
+	dir, err := mygo.App.Path(mygo.PathUserData)
+	if err != nil {
+		return player.OpenLoudness("")
+	}
+	return player.OpenLoudness(filepath.Join(dir, "loudness.json"))
+}
+
 // pickCacheFolder asks for the folder to keep the songs played in.
 func (a *app) pickCacheFolder() {
 	start := filepath.Dir(songCacheDir(a.settings.CacheFolder))
