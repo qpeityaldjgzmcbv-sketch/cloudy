@@ -45,6 +45,9 @@ var historyPath = func() (string, error) {
 
 // Keep a stable portable fallback when the user-data directory is read-only.
 var historyFallbackPath = func() (string, error) {
+	if dir := os.Getenv("CLOUDY_PORTABLE_DIR"); dir != "" {
+		return filepath.Join(dir, "cloudy-history.json"), nil
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err

@@ -24,6 +24,9 @@ var sessionPath = func() (string, error) {
 }
 
 var sessionFallbackPath = func() (string, error) {
+	if dir := os.Getenv("CLOUDY_PORTABLE_DIR"); dir != "" {
+		return filepath.Join(dir, "cloudy-session.json"), nil
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err

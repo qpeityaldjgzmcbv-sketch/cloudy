@@ -4,3 +4,7 @@ mygo_windows_*.syso
 /netease-music-mygo
 /node_modules/
 .DS_Store
+
+# Local Go module downloads and Python helper bytecode.
+/pkg/mod/
+__pycache__/

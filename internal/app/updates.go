@@ -11,6 +11,8 @@ import (
 // The update check and the install, which tests swap: they need a build
 // with updates, and the network.
 var (
+	// Set by the personal distribution builder: upstream binaries lack the bridge.
+	managedBuild  = ""
 	checkUpdate   = func(ctx context.Context) (*mygo.Update, error) { return mygo.Updater.Check(ctx) }
 	installUpdate = func(up *mygo.Update, progress func(got, total int64)) error {
 		return up.Install(context.Background(), progress)
@@ -36,6 +38,9 @@ type updateState struct {
 // offers them in the update pane rather than in a window of the updater
 // plugin, whose plain UI sat apart from the app's glass.
 func (a *app) useUpdater() {
+	if managedBuild == "1" {
+		return
+	}
 	a.updates = true
 	mygo.Updater.SetMirrors(updateMirrors...)
 }
@@ -50,6 +55,9 @@ func (a *app) checkForUpdates() {
 // the listener only when there is one, else for the listener, who sees the
 // pane from the start.
 func (a *app) startCheck(auto bool) {
+	if managedBuild == "1" {
+		return
+	}
 	u := &a.update
 	if u.checking || u.downloading {
 		if !auto {
@@ -147,6 +155,9 @@ func updateError(err error) string {
 // autoCheckUpdates looks for updates soon after launch, and then once a day,
 // while the listener asked to be told of new versions.
 func (a *app) autoCheckUpdates() {
+	if managedBuild == "1" {
+		return
+	}
 	if !a.settings.UpdateChecks {
 		return
 	}
