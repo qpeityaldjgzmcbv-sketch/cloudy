@@ -46,6 +46,9 @@ type Player struct {
 	// Changed, if set, hears that what plays, where it is or whether it
 	// plays changed.
 	Changed func()
+	// ListeningBoundary samples audio before mutations. finish ends a play,
+	// seek excludes a discontinuity, sample preserves the current play.
+	ListeningBoundary func(action string)
 	// StopAfterSong pauses as the song playing ends, once, rather than
 	// going on; SongStopped, if set, hears that it did.
 	StopAfterSong bool
@@ -191,6 +194,7 @@ func (p *Player) announce(t *netease.Track, artwork []byte) {
 }
 
 func (p *Player) ended() {
+	p.listeningBoundary("finish")
 	p.tellListened(true)
 	if p.StopAfterSong {
 		p.StopAfterSong = false
@@ -211,6 +215,7 @@ func (p *Player) ended() {
 		p.heardGen = 0
 		p.out.Seek(0)
 		p.out.Play()
+		p.sync()
 		return
 	}
 	if p.at+1 >= len(p.order) && p.feed != nil {
@@ -550,6 +555,7 @@ func (p *Player) Jump(i int) {
 
 // TogglePlay pauses, fading out, or plays, fading in.
 func (p *Player) TogglePlay() {
+	p.listeningBoundary("sample")
 	if p.out == nil {
 		switch {
 		case p.loading:
@@ -582,6 +588,7 @@ func (p *Player) TogglePlay() {
 	p.playing = true
 	if !p.seeking && !out.Playing() {
 		if out.Position() >= out.Duration()-time.Second {
+			p.listeningBoundary("finish")
 			out.Seek(0)
 		}
 		out.Play()
@@ -599,6 +606,7 @@ const seekGap = 30 * time.Millisecond
 // which the audio player fades over a few milliseconds, rather than
 // cutting from one sound to the other with a click.
 func (p *Player) Seek(t time.Duration) {
+	p.listeningBoundary("seek")
 	if p.out == nil {
 		p.pending = t
 		return
@@ -752,7 +760,19 @@ func (p *Player) Levels() ([Bands]float32, bool) {
 	return spec.at(frame)
 }
 
+func (p *Player) listeningBoundary(action string) {
+	if p.ListeningBoundary != nil {
+		p.ListeningBoundary(action)
+	}
+}
+
+// ListeningPosition excludes loading, seeking and paused audio.
+func (p *Player) ListeningPosition() (time.Duration, bool) {
+	return time.Duration(float64(p.Position()) / p.Speed()), p.out != nil && p.out.Playing() && p.playing && !p.loading && !p.seeking
+}
+
 func (p *Player) stop() {
+	p.listeningBoundary("sample")
 	p.gen++
 	if p.retryTimer != nil {
 		p.retryTimer.Stop()
@@ -804,6 +824,9 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration, di
 }
 
 func (p *Player) loadAttempt(at, skipped int, play bool, from time.Duration, direction, retries int) {
+	if retries == 0 {
+		p.listeningBoundary("finish")
+	}
 	// Moving on to another track: how long this one was listened to. A
 	// retry of the same one is no move.
 	if at >= 0 && at < len(p.order) && p.track != nil && p.queue[p.order[at]].ID != p.track.ID {

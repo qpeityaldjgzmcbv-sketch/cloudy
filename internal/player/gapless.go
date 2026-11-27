@@ -243,6 +243,7 @@ func (t *tail) close() {
 // crossTo plays the track at order[at], loaded, fading in over d, while
 // the one playing fades out under it.
 func (p *Player) crossTo(at int, d time.Duration) {
+	p.listeningBoundary("finish")
 	p.tellListened(true)
 	out, s := p.out, p.stream
 	level, gain := p.fade.detach()

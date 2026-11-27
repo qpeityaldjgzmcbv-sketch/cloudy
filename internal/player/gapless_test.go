@@ -94,10 +94,20 @@ func TestGaplessStalePreloadDropped(t *testing.T) {
 // ending fades out under it.
 func TestCrossfadeOverlaps(t *testing.T) {
 	p, ch := gaplessPlayer(t)
+	// Finalize the old play while its audio position is still available.
+	observed := false
+	p.ListeningBoundary = func(action string) {
+		if action == "finish" && p.Current().ID == 1 && p.out != nil {
+			observed = true
+		}
+	}
 	p.Crossfade = func() time.Duration { return 3 * time.Second }
 	p.nearEnd(10 * time.Second)
 	waitPreload(t, p, ch)
 	p.nearEnd(2 * time.Second)
+	if !observed {
+		t.Fatal("crossfade detached audio before finalizing listening")
+	}
 	if p.Current().ID != 2 || p.out == nil {
 		t.Fatalf("crossfade did not move on: id=%d", p.Current().ID)
 	}

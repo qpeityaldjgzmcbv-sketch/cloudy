@@ -5,11 +5,46 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"netease-music-mygo/internal/listening"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// History uses the same authentication and bounds its incremental page size.
+func TestListeningEndpoint(t *testing.T) {
+	d := Descriptor{1, "http://127.0.0.1:12345", "secret", 1}
+	calls := 0
+	h := handler(d, Backend{Listening: func(_ context.Context, after int64, limit int) (any, error) {
+		calls++
+		if after != 12 || limit != 20 {
+			t.Fatalf("after %d limit %d", after, limit)
+		}
+		return listening.Page{SourceID: "test", Cursor: 12, Events: []listening.Event{}}, nil
+	}})
+	for _, tc := range []struct {
+		query, token string
+		code         int
+	}{
+		{"?after=12&limit=20", "", 403},
+		{"?after=-1&limit=20", "secret", 400},
+		{"?after=12&limit=501", "secret", 400},
+		{"?after=x&limit=20", "secret", 400},
+		{"?after=12&limit=20", "secret", 200},
+	} {
+		r := httptest.NewRequest("GET", d.URL+"/v1/listening"+tc.query, nil)
+		r.Header.Set("Authorization", "Bearer "+tc.token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.code {
+			t.Fatalf("%s: %d", tc.query, w.Code)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("calls %d", calls)
+	}
+}
 
 // Local clients must authenticate; a website or a forged Host cannot play songs.
 func TestAuthorization(t *testing.T) {

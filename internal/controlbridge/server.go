@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,6 +43,7 @@ type Status struct {
 	Error      string `json:"error"`
 }
 type Backend struct {
+	Listening    func(context.Context, int64, int) (any, error)
 	Diagnostics  func(context.Context) (any, error)
 	SearchAlbums func(context.Context, string) ([]Album, error)
 	PlayAlbum    func(context.Context, int64) (Status, error)
@@ -165,6 +167,18 @@ func handler(d Descriptor, b Backend) http.Handler {
 		var result any
 		var err error
 		switch {
+		case r.Method == "GET" && r.URL.Path == "/v1/listening":
+			if b.Listening == nil {
+				fail(w, 404, "聆听记录接口不可用")
+				return
+			}
+			after, parseErr := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+			limit, limitErr := strconv.Atoi(r.URL.Query().Get("limit"))
+			if parseErr != nil || limitErr != nil || after < 0 || limit < 1 || limit > 500 {
+				fail(w, 400, "聆听记录游标无效")
+				return
+			}
+			result, err = b.Listening(ctx, after, limit)
 		case r.Method == "GET" && r.URL.Path == "/v1/diagnostics":
 			if b.Diagnostics == nil {
 				fail(w, 404, "诊断接口不可用")

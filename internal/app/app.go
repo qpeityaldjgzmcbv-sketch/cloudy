@@ -168,9 +168,10 @@ type app struct {
 	sideDragging bool            // the sidebar's edge is being dragged
 	shownTracks  []netease.Track // the songs the page lists now, for choosing among them
 	recent       recentState     // the songs played on this computer
-	cloud        cloudState      // the listener's music cloud drive
-	up           uploadState     // the songs going up to the cloud drive
-	outputList   outputList      // the audio outputs, as last listed
+	listening    listeningState
+	cloud        cloudState  // the listener's music cloud drive
+	up           uploadState // the songs going up to the cloud drive
+	outputList   outputList  // the audio outputs, as last listed
 	comments     commentState
 	tabCount     rollState // the count on the comments' tab, as it rolls
 
@@ -385,6 +386,7 @@ func Run() error {
 			a.toast = "定时结束，本首播完后已暂停"
 		}
 		a.pl.Changed = func() {
+			a.sampleListening(true)
 			a.observeHistory()
 			a.keepSession()
 			a.autoFollow()
@@ -413,6 +415,7 @@ func Run() error {
 			// Started at login, as the listener asked: to the tray.
 			Hidden: a.startsHidden(),
 		})
+		a.startListening()
 		a.startControlBridge()
 		a.setMenu()
 		a.boot()
@@ -460,6 +463,7 @@ func Run() error {
 		a.settings.save()
 		a.saveSession()
 		a.flushHistory()
+		a.flushListening()
 		if write := a.transcriptWrite(); write != nil {
 			write()
 		}

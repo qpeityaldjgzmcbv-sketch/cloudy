@@ -79,6 +79,24 @@ func (a *app) startControlBridge() {
 		return v.(controlbridge.Status), nil
 	}
 	server, err := controlbridge.StartDefault(controlbridge.Backend{
+		Listening: func(ctx context.Context, after int64, limit int) (any, error) {
+			_, err := a.bridgeCall(ctx, func() (any, error) {
+				a.sampleListening(false)
+				a.saveListening(false)
+				return nil, nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			w := a.listening.writer
+			if w == nil {
+				return nil, errors.New("聆听记录存储不可用")
+			}
+			if err := w.flush(); err != nil {
+				return nil, err
+			}
+			return w.store.Read(after, limit)
+		},
 		Diagnostics: func(ctx context.Context) (any, error) {
 			return a.bridgeCall(ctx, func() (any, error) {
 				a.loadHistory()
